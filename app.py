@@ -482,8 +482,24 @@ elif modul_ales == "👥 Clienți & Contracte (CAJ)":
     with tab_caj:
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
-        c_list = cur.fetchall()
+        cur.execute("""
+            SELECT 
+                c.id AS ID, 
+                c.denumire AS 'Denumire', 
+                c.tip_persoana AS 'Tip', 
+                c.cui_cnp AS 'CUI / CNP', 
+                COALESCE(
+                    GROUP_CONCAT(DISTINCT CONCAT(k.serie_numar, ' (', k.tip_onorariu, ': ', k.valoare_onorariu, ' ', k.moneda, ')') SEPARATOR ' | '), 
+                    '-'
+                ) AS 'Contracte Asistență (CAJ)',
+                c.email_contact AS 'Email', 
+                c.telefon_contact AS 'Telefon' 
+            FROM clienti c
+            LEFT JOIN contracte k ON c.id = k.client_id
+            GROUP BY c.id, c.denumire, c.tip_persoana, c.cui_cnp, c.email_contact, c.telefon_contact
+            ORDER BY c.denumire ASC
+        """)
+        clienti_df = cur.fetchall()
         conn.close()
         
         c_dict = {c['denumire']: c['id'] for c in c_list}
