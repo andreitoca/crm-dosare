@@ -9,7 +9,7 @@ import re
 from db_config import get_connection
 
 st.set_page_config(
-    page_title="Toca Law CRM - Dosare, Clienți & Pontaj",
+    page_title="ȚOCA SCA CRM - Dosare, Clienți & Pontaj",
     page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -190,7 +190,7 @@ with sync_playwright() as p:
         return None
 
 # --- BARA LATERALĂ: SELECTARE UTILIZATOR & MODUL ---
-st.sidebar.title("⚖️ Toca Law CRM")
+st.sidebar.title("⚖️ ȚOCA SCA CRM")
 
 conn = get_connection()
 cur = conn.cursor()
