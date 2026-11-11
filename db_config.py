@@ -10,7 +10,7 @@ def get_connection():
             host=cfg["host"],
             user=cfg["user"],
             password=cfg["password"],
-            database=cfg.get("database", "sys"),
+            database=cfg.get("database", "test"),
             port=int(cfg.get("port", 4000)),
             connect_timeout=25,
             ssl={"reject_unauthorized": False},
