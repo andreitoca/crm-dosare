@@ -1,36 +1,35 @@
 import os
 import pymysql
+import streamlit as st
 
-# Daca ruleaza pe Streamlit Cloud, citeste datele securizate din st.secrets
-# Daca ruleaza local, foloseste valorile configurate
-try:
-    import streamlit as st
+def get_connection():
+    # 1. Citire prioritara din Streamlit Secrets (Cloud)
     if hasattr(st, "secrets") and "mysql" in st.secrets:
-        DB_HOST = st.secrets["mysql"]["host"]
-        DB_USER = st.secrets["mysql"]["user"]
-        DB_NAME = st.secrets["mysql"]["database"]
-        DB_PASS = st.secrets["mysql"]["password"]
-        DB_PORT = int(st.secrets["mysql"].get("port", 3306))
-    else:
-        raise Exception("Local fallback")
-except Exception:
-    DB_HOST = "toca-law.ro"
-    DB_USER = "tocaladd_actualizari"
-    DB_NAME = "tocaladd_dosare"
-    # Citim parola din fisierul local existent
+        cfg = st.secrets["mysql"]
+        return pymysql.connect(
+            host=cfg["host"],
+            user=cfg["user"],
+            password=cfg["password"],
+            database=cfg["database"],
+            port=int(cfg.get("port", 3306)),
+            connect_timeout=20,
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor
+        )
+    
+    # 2. Conectare locala (fallback pentru rulare de pe PC)
     try:
         from db_config_local import DB_PASS
     except Exception:
         DB_PASS = ""
-    DB_PORT = 3306
-
-def get_connection():
+        
     return pymysql.connect(
-        host=DB_HOST,
-        user=DB_USER,
+        host="toca-law.ro",
+        user="tocaladd_actualizari",
         password=DB_PASS,
-        database=DB_NAME,
-        port=DB_PORT,
+        database="tocaladd_dosare",
+        port=3306,
+        connect_timeout=20,
         charset='utf8mb4',
         cursorclass=pymysql.cursors.DictCursor
     )
