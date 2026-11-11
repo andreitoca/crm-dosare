@@ -217,7 +217,6 @@ modul_ales = st.sidebar.radio(
 
 # === 1. PORTOFOLIU DOSARE ===
 if modul_ales == "📋 Portofoliu Dosare":
-    if modul_ales == "📋 Portofoliu Dosare":
     st.markdown("""
         <div style="
             background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%);
@@ -232,6 +231,8 @@ if modul_ales == "📋 Portofoliu Dosare":
         </div>
     """, unsafe_allow_html=True)
     
+    # Preluăm lista de clienți pentru dropdown
+    conn = get_connection()
     # Preluăm lista de clienți pentru dropdown
     conn = get_connection()
     cur = conn.cursor()
