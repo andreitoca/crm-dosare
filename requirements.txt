@@ -1,0 +1,6 @@
+streamlit
+zeep
+pandas
+pymysql
+cryptography
+playwright
