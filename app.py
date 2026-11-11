@@ -227,7 +227,7 @@ if modul_ales == "📋 Portofoliu Dosare":
             box-shadow: 0 4px 12px rgba(65, 105, 225, 0.25);
         ">
             <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: white;">Portofoliu Dosare</h1>
-            <p style="margin: 5px 0 0 0; font-size: 14px; color: #E0E7FF;">Evidența și monitorizarea litigiilor (Instanțe & CNSC)</p>
+            <p style="margin: 5px 0 0 0; font-size: 14px; color: #E0E7FF;">Evidența și monitorizarea litigiilor</p>
         </div>
     """, unsafe_allow_html=True)
     
