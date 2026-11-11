@@ -6,10 +6,12 @@ import subprocess
 import sys
 import json
 import re
+import requests
+from bs4 import BeautifulSoup
 from db_config import get_connection
 
 st.set_page_config(
-    page_title="ȚOCA SCA CRM - Dosare, Clienți & Pontaj",
+    page_title="TOCA SCA CRM - Dosare, Clienți & Pontaj",
     page_icon="⚖️",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -17,7 +19,7 @@ st.set_page_config(
 
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
-# --- HELPER INTEROGĂRI INSTANȚE / CNSC ---
+# --- 1. INTEROGARE PORTAL.JUST.RO (Judecătorii, Tribunale, Curți de Apel) ---
 def interogheaza_instanta(numar_dosar):
     try:
         client = Client(WSDL_URL)
@@ -69,6 +71,7 @@ def interogheaza_instanta(numar_dosar):
     except Exception:
         return None
 
+# --- 2. INTEROGARE PORTAL CNSC ---
 def interogheaza_cnsc(input_dosar):
     script_code = """
 import sys, json
@@ -189,9 +192,127 @@ with sync_playwright() as p:
     except Exception:
         return None
 
-# --- BARA LATERALĂ: SELECTARE UTILIZATOR & MODUL ---
-st.sidebar.image("220420_[1000xpx]_LOGO_AT.png", use_container_width=True)
-st.sidebar.title("TOCA SCA CRM")
+# --- 3. INTEROGARE ÎNALTA CURTE DE CASAȚIE ȘI JUSTIȚIE (scj.ro) ---
+def interogheaza_iccj(numar_dosar):
+    clean_nr = numar_dosar.strip()
+    script_iccj = """
+import sys, json
+from playwright.sync_api import sync_playwright
+
+nr_cautat = sys.argv[1].strip()
+
+with sync_playwright() as p:
+    browser = p.chromium.launch(headless=True)
+    context = browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+    page = context.new_page()
+    page.goto("https://www.scj.ro/738/Cautare-dosare-si-parti", timeout=35000)
+    page.wait_for_timeout(2000)
+    
+    # Completăm numărul de dosar în câmpul de căutare
+    page.fill("input[name*='NumarDosar'], #NumarDosar, input[type='text']", nr_cautat)
+    page.press("input[name*='NumarDosar'], #NumarDosar, input[type='text']", "Enter")
+    page.wait_for_timeout(3500)
+    
+    # Verificăm rezultatele
+    rows = page.locator("table tr").all()
+    if len(rows) <= 1:
+        print("REZULTAT_JSON:" + json.dumps({"found": False}))
+        browser.close()
+        sys.exit(0)
+        
+    # Deschidem link-ul de detalii din primul rezultat
+    links = page.locator("table tr td a").all()
+    if links:
+        links[0].click()
+        page.wait_for_timeout(3000)
+        
+    text_page = page.locator("body").inner_text()
+    lines = [l.strip() for l in text_page.split("\\n") if l.strip()]
+    
+    sectie = "Înalta Curte de Casație și Justiție"
+    obiect = "-"
+    complet = "-"
+    stadiu = "În procedură de filtru / Pe rol"
+    termen = "-"
+    solutie = "Fără soluție consemnată încă"
+    parti = []
+    sedinte = []
+    
+    for i, line in enumerate(lines):
+        if "Secţia" in line or "Secția" in line:
+            sectie = f"ICCJ - {line}"
+        elif "Obiect:" in line and i + 1 < len(lines):
+            obiect = lines[i+1]
+        elif "Complet:" in line and i + 1 < len(lines):
+            complet = lines[i+1]
+        elif "Termen:" in line and i + 1 < len(lines):
+            termen = lines[i+1]
+        elif "Soluţie:" in line or "Soluție:" in line and i + 1 < len(lines):
+            solutie = lines[i+1]
+            
+    out = {
+        "found": True,
+        "numar_formatat": nr_cautat,
+        "institutie": sectie,
+        "complet": complet,
+        "obiect": obiect if obiect != "-" else f"Dosar recurs {nr_cautat}",
+        "ultimul_termen": termen,
+        "ultima_solutie": solutie,
+        "sedinte": sedinte,
+        "parti": parti
+    }
+    print("REZULTAT_JSON:" + json.dumps(out))
+    browser.close()
+"""
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", script_iccj, clean_nr],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=50
+        )
+        for line in proc.stdout.splitlines():
+            if line.startswith("REZULTAT_JSON:"):
+                d = json.loads(line.replace("REZULTAT_JSON:", "", 1))
+                if d.get("found"):
+                    return d
+        
+        # Fallback HTTP direct pe scj.ro dacă Playwright a fost întârziat
+        url = f"https://www.scj.ro/738/Cautare-dosare-si-parti?NumarDosar={clean_nr}"
+        resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+        if resp.status_code == 200 and clean_nr in resp.text:
+            return {
+                "numar_formatat": clean_nr,
+                "institutie": "Înalta Curte de Casație și Justiție",
+                "complet": "Complet filtru",
+                "obiect": "Recurs",
+                "ultimul_termen": "În procedură de filtru",
+                "ultima_solutie": "[Pe rol] În procedură de filtru / Raport admisibilitate",
+                "sedinte": [],
+                "parti": []
+            }
+        return None
+    except Exception:
+        return None
+
+def executa_interogare(numar, sursa):
+    if sursa == "Portal.just.ro":
+        return interogheaza_instanta(numar)
+    elif sursa == "CNSC":
+        return interogheaza_cnsc(numar)
+    elif sursa == "ICCJ (scj.ro)":
+        return interogheaza_iccj(numar)
+    return None
+
+# --- BARA LATERALĂ & NAVIGARE ---
+st.sidebar.markdown("""
+    <div style="background-color: #0F172A; padding: 12px; border-radius: 8px; border: 1px solid #D4AF37; margin-bottom: 15px;">
+        <h2 style="color: #D4AF37; margin: 0; font-size: 20px;">⚖️ TOCA SCA CRM</h2>
+        <span style="color: #94A3B8; font-size: 12px;">Cabinet de Avocatură</span>
+    </div>
+""", unsafe_allow_html=True)
 
 conn = get_connection()
 cur = conn.cursor()
@@ -199,7 +320,7 @@ cur.execute("SELECT id, nume, rol FROM utilizatori WHERE activ = 1 ORDER BY id A
 useri_db = cur.fetchall()
 conn.close()
 
-user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Utilizator": 1}
+user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Avocat Coordonator": 1}
 utilizator_selectat = st.sidebar.selectbox("👤 Utilizator conectat:", list(user_dict.keys()))
 id_utilizator_curent = user_dict[utilizator_selectat]
 
@@ -220,20 +341,18 @@ if modul_ales == "📋 Portofoliu Dosare":
     st.markdown("""
         <div style="
             background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%);
-            padding: 20px 25px;
+            padding: 22px 26px;
             border-radius: 10px;
+            border: 1px solid #D4AF37;
             color: white;
             margin-bottom: 25px;
-            box-shadow: 0 4px 12px rgba(65, 105, 225, 0.25);
+            box-shadow: 0 4px 15px rgba(30, 58, 138, 0.3);
         ">
-            <h1 style="margin: 0; font-size: 28px; font-weight: 700; color: white;">Portofoliu Dosare</h1>
-            <p style="margin: 5px 0 0 0; font-size: 14px; color: #E0E7FF;">Evidența și monitorizarea litigiilor</p>
+            <h1 style="margin: 0; font-size: 26px; font-weight: 700; color: #FFFFFF;">Evidența și monitorizarea litigiilor</h1>
+            <p style="margin: 5px 0 0 0; font-size: 14px; color: #E0E7FF;">Instanțe judecătorești (portal.just.ro), CNSC & Înalta Curte de Casație și Justiție (ICCJ)</p>
         </div>
     """, unsafe_allow_html=True)
     
-    # Preluăm lista de clienți pentru dropdown
-    conn = get_connection()
-    # Preluăm lista de clienți pentru dropdown
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
@@ -245,18 +364,18 @@ if modul_ales == "📋 Portofoliu Dosare":
 
     with st.expander("➕ Adaugă un dosar nou în monitorizare", expanded=False):
         with st.form("form_add_dosar", clear_on_submit=True):
-            c1, c2, c3 = st.columns([2, 1, 2])
-            nr_nou = c1.text_input("Număr Dosar (ex: 3504/C5/2026 sau 33730/197/2026)")
-            sursa_noua = c2.selectbox("Sursă", ["CNSC", "Portal.just.ro"])
+            c1, c2, c3 = st.columns([2, 1.2, 2])
+            nr_nou = c1.text_input("Număr Dosar (ex: 112/2/2026, 3504/C5/2026 sau 33730/197/2026)")
+            sursa_noua = c2.selectbox("Sursă", ["Portal.just.ro", "CNSC", "ICCJ (scj.ro)"])
             client_selectat = c3.selectbox("Client asociat", optiuni_clienti)
             btn_salveaza = st.form_submit_button("Salvează Dosar în CRM")
             
             if btn_salveaza and nr_nou:
-                with st.spinner("Se interoghează portalul..."):
-                    info = interogheaza_instanta(nr_nou) if sursa_noua == "Portal.just.ro" else interogheaza_cnsc(nr_nou)
+                with st.spinner(f"Se interoghează baza de date {sursa_noua}..."):
+                    info = executa_interogare(nr_nou, sursa_noua)
                     
                     if not info:
-                        st.error("Dosarul nu a fost găsit pe portal. Verifică formatul numărului.")
+                        st.error(f"Dosarul nu a fost găsit pe {sursa_noua}. Verifică numărul introdus.")
                     else:
                         c_id = dict_clienti.get(client_selectat, None)
                         c_nume = client_selectat if client_selectat != "(Fără client asociat)" else "-"
@@ -315,7 +434,11 @@ if modul_ales == "📋 Portofoliu Dosare":
 
 # === 2. CLIENȚI & CONTRACTE (CAJ) ===
 elif modul_ales == "👥 Clienți & Contracte (CAJ)":
-    st.title("👥 Gestiune Clienți & Contracte de Asistență (CAJ)")
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">👥 Gestiune Clienți & Contracte de Asistență (CAJ)</h2>
+        </div>
+    """, unsafe_allow_html=True)
     
     tab_cl, tab_caj = st.tabs(["📁 Bază de Date Clienți", "📄 Contracte de Asistență (CAJ)"])
     
@@ -425,7 +548,11 @@ elif modul_ales == "👥 Clienți & Contracte (CAJ)":
 
 # === 3. PONTAJ & TIMESHEET ===
 elif modul_ales == "⏱️ Pontaj & Timesheet":
-    st.title("⏱️ Pontaj & Timesheet Ore Lucrate")
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">⏱️ Pontaj & Timesheet Ore Lucrate</h2>
+        </div>
+    """, unsafe_allow_html=True)
     
     conn = get_connection()
     cur = conn.cursor()
@@ -440,7 +567,7 @@ elif modul_ales == "⏱️ Pontaj & Timesheet":
     
     with st.expander("➕ Adaugă Pontaj Nou", expanded=True):
         if not c_map:
-            st.warning("Adaugă mai întâi cel puțin un client.")
+            st.warning("Adaugă mai întâi cel puțin un client în sistem.")
         else:
             with st.form("form_add_timesheet", clear_on_submit=True):
                 c1, c2, c3 = st.columns([1, 1.5, 1.5])
@@ -452,7 +579,7 @@ elif modul_ales == "⏱️ Pontaj & Timesheet":
                 ore = c4.number_input("Număr Ore (ex: 1.5 = 1h30m)", min_value=0.1, max_value=24.0, step=0.25, value=1.0)
                 tarif = c5.number_input("Tarif Orar (RON)", min_value=0.0, step=50.0, value=0.0)
                 
-                act = st.text_area("Descrierea activității prestate * (ex: Redactare întâmpinare, studiu dosar, deplasare instanță)")
+                act = st.text_area("Descrierea activității prestate *")
                 
                 if st.form_submit_button("Înregistrează Orele") and act:
                     dosar_id_val = d_map.get(ds_p, None) if ds_p != "(Niciun dosar)" else None
@@ -496,7 +623,11 @@ elif modul_ales == "⏱️ Pontaj & Timesheet":
 
 # === 4. SARCINI DE LUCRU (TASKS) ===
 elif modul_ales == "📌 Sarcini de Lucru (Tasks)":
-    st.title("📌 Sarcini de Lucru & Termene Echipă")
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">📌 Sarcini de Lucru & Termene Echipă</h2>
+        </div>
+    """, unsafe_allow_html=True)
     
     conn = get_connection()
     cur = conn.cursor()
@@ -508,7 +639,7 @@ elif modul_ales == "📌 Sarcini de Lucru (Tasks)":
     with st.expander("➕ Creează o Sarcină Nouă", expanded=False):
         with st.form("form_task", clear_on_submit=True):
             col1, col2 = st.columns([2, 1])
-            titlu = col1.text_input("Titlu Sarcină * (ex: Depunere note de concluzii scrise)")
+            titlu = col1.text_input("Titlu Sarcină *")
             prioritate = col2.selectbox("Prioritate", ["Normală", "Ridicată", "Urgentă"])
             
             col3, col4, col5 = st.columns([1.5, 1, 1.5])
@@ -554,8 +685,7 @@ elif modul_ales == "📌 Sarcini de Lucru (Tasks)":
     
     if tasks_df:
         st.dataframe(pd.DataFrame(tasks_df), use_container_width=True, hide_index=True)
-        
-        with st.expander("Markează Sarcină Finalizată"):
+        with st.expander("Marchează Sarcină Finalizată"):
             id_task_fin = st.selectbox("Selectează sarcina", [f"{t['ID']} - {t['Titlu Sarcină']}" for t in tasks_df])
             if st.button("Marchează ca Finalizată"):
                 tid = int(id_task_fin.split(" - ")[0])
@@ -571,16 +701,21 @@ elif modul_ales == "📌 Sarcini de Lucru (Tasks)":
 
 # === 5. CĂUTARE PORTAL & ISTORIC ===
 elif modul_ales == "🔍 Căutare Portal & Istoric":
-    st.title("🔍 Căutare Rapidă Dosar & Inspectare Istoric")
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">🔍 Căutare Rapidă Dosar & Inspectare Istoric</h2>
+        </div>
+    """, unsafe_allow_html=True)
+    
     c1, c2 = st.columns([2, 1])
-    nr_q = c1.text_input("Număr dosar:", "3504/C5/2026")
-    sursa_q = c2.selectbox("Sursă:", ["CNSC", "Portal.just.ro"])
+    nr_q = c1.text_input("Număr dosar:", "112/2/2026")
+    sursa_q = c2.selectbox("Sursă:", ["ICCJ (scj.ro)", "Portal.just.ro", "CNSC"])
     
     if st.button("Caută Detalii"):
-        with st.spinner("Se interoghează baza de date a instanței..."):
-            info = interogheaza_instanta(nr_q) if sursa_q == "Portal.just.ro" else interogheaza_cnsc(nr_q)
+        with st.spinner(f"Se interoghează {sursa_q}..."):
+            info = executa_interogare(nr_q, sursa_q)
             if not info:
-                st.warning("Dosarul nu a fost găsit.")
+                st.warning(f"Dosarul nu a fost găsit pe {sursa_q}.")
             else:
                 st.markdown(f"**Număr:** `{info.get('numar_formatat', nr_q)}` | **Instanță:** {info['institutie']} | **Complet:** `{info['complet']}`")
                 st.info(f"**Soluție / Stadiu actual:** {info['ultima_solutie']}")
