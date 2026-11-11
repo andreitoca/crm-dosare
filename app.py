@@ -307,12 +307,10 @@ def executa_interogare(numar, sursa):
     return None
 
 # --- BARA LATERALĂ & NAVIGARE ---
-st.sidebar.markdown("""
-    <div style="background-color: #0F172A; padding: 12px; border-radius: 8px; border: 1px solid #D4AF37; margin-bottom: 15px;">
-        <h2 style="color: #D4AF37; margin: 0; font-size: 20px;">⚖️ TOCA SCA CRM</h2>
-        <span style="color: #94A3B8; font-size: 12px;">Cabinet de Avocatură</span>
-    </div>
-""", unsafe_allow_html=True)
+try:
+    st.sidebar.image("220420_[1000xpx]_LOGO_AT.png", use_container_width=True)
+except Exception:
+    st.sidebar.markdown("### ⚖️ TOCA SCA CRM")
 
 conn = get_connection()
 cur = conn.cursor()
