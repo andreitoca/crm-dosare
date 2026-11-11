@@ -470,18 +470,6 @@ elif modul_ales == "👥 Clienți & Contracte (CAJ)":
                     
         conn = get_connection()
         cur = conn.cursor()
-        cur.execute("SELECT id as ID, denumire as 'Denumire', tip_persoana as 'Tip', cui_cnp as 'CUI / CNP', email_contact as 'Email', telefon_contact as 'Telefon' FROM clienti ORDER BY denumire ASC")
-        clienti_df = cur.fetchall()
-        conn.close()
-        
-        if clienti_df:
-            st.dataframe(pd.DataFrame(clienti_df), use_container_width=True, hide_index=True)
-        else:
-            st.info("Niciun client înregistrat încă.")
-
-    with tab_caj:
-        conn = get_connection()
-        cur = conn.cursor()
         cur.execute("""
             SELECT 
                 c.id AS ID, 
@@ -502,7 +490,19 @@ elif modul_ales == "👥 Clienți & Contracte (CAJ)":
         clienti_df = cur.fetchall()
         conn.close()
         
-        c_dict = {c['denumire']: c['id'] for c in c_list}
+        if clienti_df:
+            st.dataframe(pd.DataFrame(clienti_df), use_container_width=True, hide_index=True)
+        else:
+            st.info("Niciun client înregistrat încă.")
+
+    with tab_caj:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
+        c_list = cur.fetchall()
+        conn.close()
+        
+        c_dict = {c['denumire']: c['id'] for c in c_list} if c_list else {}
         
         with st.expander("➕ Înregistrează Contract Nou (CAJ)", expanded=False):
             if not c_dict:
