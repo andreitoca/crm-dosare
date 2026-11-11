@@ -190,7 +190,8 @@ with sync_playwright() as p:
         return None
 
 # --- BARA LATERALĂ: SELECTARE UTILIZATOR & MODUL ---
-st.sidebar.title("⚖️ ȚOCA SCA CRM")
+st.sidebar.image("220420_[1000xpx]_LOGO_AT.png", use_container_width=True)
+st.sidebar.title("TOCA SCA CRM")
 
 conn = get_connection()
 cur = conn.cursor()
