@@ -1,22 +1,23 @@
 import streamlit as st
-from zeep import Client
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
+from zeep import Client
 import subprocess
 import sys
 import json
 import re
-import smtplib
-import ssl
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 from db_config import get_connection
 
-st.set_page_config(page_title="CRM Monitorizare Dosare & CNSC", layout="wide")
+st.set_page_config(
+    page_title="Toca Law CRM - Dosare, Clienți & Pontaj",
+    page_icon="⚖️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
-# --- 1. INTEROGARE PORTAL.JUST.RO ---
+# --- HELPER INTEROGĂRI INSTANȚE / CNSC ---
 def interogheaza_instanta(numar_dosar):
     try:
         client = Client(WSDL_URL)
@@ -29,30 +30,30 @@ def interogheaza_instanta(numar_dosar):
         obiect = str(dosar.obiect or "-")
         complet_actual = "-"
         ultimul_termen = "-"
-        ultima_solutie = "Fara solutie consemnata inca"
+        ultima_solutie = "Fără soluție consemnată încă"
         lista_sedinte = []
 
-        if hasattr(dosar, "sedinte") and dosar.sedinte and hasattr(dosar.sedinte, "DosarSedinta"):
+        if hasattr(dosar, 'sedinte') and dosar.sedinte and hasattr(dosar.sedinte, 'DosarSedinta'):
             sedinte = dosar.sedinte.DosarSedinta
             for s in sedinte:
                 data_dt = s.data
-                data_str = data_dt.strftime("%d.%m.%Y") if hasattr(data_dt, "strftime") else str(data_dt)
-                sol = s.solutieSumar or "Fara solutie consemnata inca"
+                data_str = data_dt.strftime("%d.%m.%Y") if hasattr(data_dt, 'strftime') else str(data_dt)
+                sol = s.solutieSumar or "Fără soluție consemnată încă"
                 comp = s.complet or "-"
                 lista_sedinte.append({
                     "Data": data_str,
                     "Ora": s.ora or "-",
                     "Complet": comp,
                     "Document": s.documentSedinta or "-",
-                    "Solutie pe scurt": sol
+                    "Soluție pe scurt": sol
                 })
             if lista_sedinte:
-                complet_actual = lista_sedinte[0]["Complet"]
+                complet_actual = lista_sedinte[0]['Complet']
                 ultimul_termen = f"{lista_sedinte[0]['Data']} ({lista_sedinte[0]['Ora']})"
-                ultima_solutie = f"[{lista_sedinte[0]['Data']}] {lista_sedinte[0]['Solutie pe scurt']}"
+                ultima_solutie = f"[{lista_sedinte[0]['Data']}] {lista_sedinte[0]['Soluție pe scurt']}"
 
         parti_list = []
-        if hasattr(dosar, "parti") and dosar.parti and hasattr(dosar.parti, "DosarParte"):
+        if hasattr(dosar, 'parti') and dosar.parti and hasattr(dosar.parti, 'DosarParte'):
             parti_list = [{"Nume Parte": p.nume, "Calitate": p.calitateParte} for p in dosar.parti.DosarParte]
 
         return {
@@ -68,7 +69,6 @@ def interogheaza_instanta(numar_dosar):
     except Exception:
         return None
 
-# --- 2. INTEROGARE PORTAL CNSC ---
 def interogheaza_cnsc(input_dosar):
     script_code = """
 import sys, json
@@ -154,7 +154,6 @@ with sync_playwright() as p:
         rezultat_solutie += f"Ultima înreg: {inregistrari[0]['Document']} ({inregistrari[0]['Data']})"
         
     numar_oficial = f"{nr_dosar}/{complet_gasit}/{an_dosar}"
-    
     out = {
         "found": True,
         "numar_formatat": numar_oficial,
@@ -190,286 +189,389 @@ with sync_playwright() as p:
     except Exception:
         return None
 
-# --- 3. TRIMITERE EMAIL DIRECT cPanel ---
-def trimite_email_notificare(numar_dosar, client_nume, institutie, complet, solutie_veche, solutie_noua):
+# --- BARA LATERALĂ: SELECTARE UTILIZATOR & MODUL ---
+st.sidebar.title("⚖️ Toca Law CRM")
+
+conn = get_connection()
+cur = conn.cursor()
+cur.execute("SELECT id, nume, rol FROM utilizatori WHERE activ = 1 ORDER BY id ASC")
+useri_db = cur.fetchall()
+conn.close()
+
+user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Utilizator": 1}
+utilizator_selectat = st.sidebar.selectbox("👤 Utilizator conectat:", list(user_dict.keys()))
+id_utilizator_curent = user_dict[utilizator_selectat]
+
+st.sidebar.markdown("---")
+modul_ales = st.sidebar.radio(
+    "Navigare:",
+    [
+        "📋 Portofoliu Dosare",
+        "👥 Clienți & Contracte (CAJ)",
+        "⏱️ Pontaj & Timesheet",
+        "📌 Sarcini de Lucru (Tasks)",
+        "🔍 Căutare Portal & Istoric"
+    ]
+)
+
+# === 1. PORTOFOLIU DOSARE ===
+if modul_ales == "📋 Portofoliu Dosare":
+    st.title("📋 Portofoliu Dosare (Instanțe & CNSC)")
+    
+    # Preluăm lista de clienți pentru dropdown
     conn = get_connection()
-    with conn.cursor() as c:
-        c.execute("SELECT smtp_server, smtp_port, email_expeditor, parola_email, email_destinatar FROM setari_email WHERE id = 1")
-        row = c.fetchone()
+    cur = conn.cursor()
+    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
+    clienti_list = cur.fetchall()
     conn.close()
     
-    if not row or not row["email_expeditor"] or not row["parola_email"] or not row["email_destinatar"]:
-        return False, "Completează datele expeditorului în Tab-ul 3."
-        
-    smtp_server = row["smtp_server"] or "toca-law.ro"
-    smtp_port = int(row["smtp_port"] or 465)
-    expeditor = row["email_expeditor"]
-    parola = row["parola_email"]
-    destinatari_lista = [email.strip() for email in re.split(r"[,;]+", row["email_destinatar"]) if email.strip()]
-    if not destinatari_lista:
-        return False, "Nu a fost specificată nicio adresă validă de destinatar."
+    dict_clienti = {c['denumire']: c['id'] for c in clienti_list}
+    optiuni_clienti = ["(Fără client asociat)"] + list(dict_clienti.keys())
 
-    subiect = f"[Actualizare Dosar] {numar_dosar} ({complet}) - {client_nume}"
-    
-    html_body = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-</head>
-<body style="font-family: Arial, Helvetica, sans-serif; color: #222; line-height: 1.5; margin: 0; padding: 15px;">
-    <div style="background-color: #1E3A8A; color: #ffffff; padding: 14px 18px; border-radius: 6px;">
-        <h2 style="margin: 0; font-size: 18px; color: #ffffff;">Modificare consemnată în dosarul {numar_dosar}</h2>
-    </div>
-    <div style="padding: 16px; border: 1px solid #E5E7EB; border-radius: 6px; margin-top: 12px; background-color: #ffffff;">
-        <p style="margin: 6px 0;"><strong>Client / Proiect:</strong> {client_nume}</p>
-        <p style="margin: 6px 0;"><strong>Instanță / Autoritate:</strong> {institutie} &mdash; <strong>Complet:</strong> {complet}</p>
-        <hr style="border: 0; border-top: 1px solid #E5E7EB; margin: 15px 0;">
-        <p style="margin: 6px 0; color: #4B5563;"><strong>Stare anterioară:</strong><br>{solutie_veche}</p>
-        <div style="background-color: #FEF3C7; padding: 12px 16px; border-left: 4px solid #F59E0B; margin: 15px 0; border-radius: 4px;">
-            <strong style="color: #92400E; display: block; margin-bottom: 4px;">Soluție / Stare NOUĂ consemnată:</strong>
-            <span style="color: #1F2937; font-size: 15px; font-weight: bold;">{solutie_noua}</span>
-        </div>
-        <p style="font-size: 11px; color: #9CA3AF; margin-top: 20px;">
-            Notificare automată transmisă din cPanel ({expeditor}) către: {', '.join(destinatari_lista)}
-        </p>
-    </div>
-</body>
-</html>"""
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subiect
-    msg["From"] = f"Notificari Dosare <{expeditor}>"
-    msg["To"] = ", ".join(destinatari_lista)
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
-
-    try:
-        if smtp_port == 465:
-            context = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=context, timeout=20)
-        else:
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=20)
-            server.starttls()
+    with st.expander("➕ Adaugă un dosar nou în monitorizare", expanded=False):
+        with st.form("form_add_dosar", clear_on_submit=True):
+            c1, c2, c3 = st.columns([2, 1, 2])
+            nr_nou = c1.text_input("Număr Dosar (ex: 3504/C5/2026 sau 33730/197/2026)")
+            sursa_noua = c2.selectbox("Sursă", ["CNSC", "Portal.just.ro"])
+            client_selectat = c3.selectbox("Client asociat", optiuni_clienti)
+            btn_salveaza = st.form_submit_button("Salvează Dosar în CRM")
             
-        server.login(expeditor, parola)
-        server.sendmail(expeditor, destinatari_lista, msg.as_string())
-        server.quit()
-        return True, f"Email expediat cu succes de la {expeditor} către {len(destinatari_lista)} destinatari!"
-    except Exception as e:
-        return False, f"Eroare cPanel SMTP: {e}"
-
-# --- 4. INTERFAȚA GRAFICĂ ---
-st.title("⚖️ Sistem CRM Dosare & CNSC (Baza MySQL cPanel)")
-
-tab1, tab2, tab3 = st.tabs(["📋 Portofoliu Dosare (CRM)", "🔍 Căutare Rapidă & Istoric", "⚙️ Configurare Expeditor & Email"])
-
-with tab1:
-    st.subheader("Adaugă un dosar nou în monitorizare")
-    with st.form("form_adauga_dosar", clear_on_submit=True):
-        col1, col2, col3, col4 = st.columns([2, 1.5, 2, 1])
-        nr_nou = col1.text_input("Număr Dosar (ex: 3504/C5/2026 sau 33730/197/2026)")
-        sursa_noua = col2.selectbox("Sursă", ["CNSC", "Portal.just.ro"])
-        client_nou = col3.text_input("Nume Client / Proiect")
-        buton_adauga = col4.form_submit_button("➕ Salvează în CRM")
-        
-        if buton_adauga and nr_nou:
-            with st.spinner(f"Se extrag datele din {sursa_noua}..."):
-                if sursa_noua == "Portal.just.ro":
-                    info = interogheaza_instanta(nr_nou)
-                else:
-                    info = interogheaza_cnsc(nr_nou)
+            if btn_salveaza and nr_nou:
+                with st.spinner("Se interoghează portalul..."):
+                    info = interogheaza_instanta(nr_nou) if sursa_noua == "Portal.just.ro" else interogheaza_cnsc(nr_nou)
                     
-                if not info:
-                    st.error(f"Dosarul {nr_nou} nu a fost găsit pe {sursa_noua}! Verifică numărul.")
-                else:
-                    conn = get_connection()
-                    acum = datetime.now().strftime("%d.%m.%Y %H:%M")
-                    nr_salvat = info.get("numar_formatat", nr_nou.strip())
-                    comp_salvat = info.get("complet", "-")
-                    try:
-                        with conn.cursor() as c:
-                            c.execute("""
-                                INSERT INTO dosare (numar_dosar, sursa, client, institutie, complet, obiect, ultimul_termen, ultima_solutie, ultima_verificare)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """, (nr_salvat, sursa_noua, client_nou or "-", info["institutie"], comp_salvat, info["obiect"], info["ultimul_termen"], info["ultima_solutie"], acum))
-                        conn.commit()
-                        st.success(f"Dosarul {nr_salvat} (Complet {comp_salvat}) a fost salvat în MySQL!")
-                    except Exception as e:
-                        st.warning("Acest dosar există deja sau a intervenit o eroare.")
-                    finally:
+                    if not info:
+                        st.error("Dosarul nu a fost găsit pe portal. Verifică formatul numărului.")
+                    else:
+                        c_id = dict_clienti.get(client_selectat, None)
+                        c_nume = client_selectat if client_selectat != "(Fără client asociat)" else "-"
+                        acum = datetime.now().strftime("%d.%m.%Y %H:%M")
+                        nr_fmt = info.get('numar_formatat', nr_nou.strip())
+                        
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        try:
+                            cur.execute("""
+                                INSERT INTO dosare (numar_dosar, sursa, client, institutie, complet, obiect, ultimul_termen, ultima_solutie, ultima_verificare, client_id)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            """, (nr_fmt, sursa_noua, c_nume, info['institutie'], info['complet'], info['obiect'], info['ultimul_termen'], info['ultima_solutie'], acum, c_id))
+                            conn.commit()
+                            st.success(f"Dosarul {nr_fmt} a fost salvat cu succes!")
+                        except Exception as e:
+                            st.error(f"Eroare la salvare (posibil număr duplicat): {e}")
                         conn.close()
-
-    st.divider()
-    
-    col_titlu, col_buton = st.columns([3, 1])
-    col_titlu.subheader("Dosarele monitorizate (partajate în timp real)")
-    
-    if col_buton.button("🔄 Verifică TOATE dosarele acum", use_container_width=True):
-        conn = get_connection()
-        with conn.cursor() as c:
-            c.execute("SELECT id, numar_dosar, sursa, client, institutie, complet, ultima_solutie FROM dosare")
-            toate = c.fetchall()
-            
-            modificari_gasite = 0
-            progres = st.progress(0)
-            
-            for idx, rand in enumerate(toate):
-                d_id = rand["id"]
-                d_nr = rand["numar_dosar"]
-                d_sursa = rand["sursa"]
-                d_client = rand["client"]
-                d_inst = rand["institutie"]
-                d_comp = rand["complet"]
-                d_sol_veche = rand["ultima_solutie"]
-                
-                info = interogheaza_instanta(d_nr) if d_sursa == "Portal.just.ro" else interogheaza_cnsc(d_nr)
-                acum = datetime.now().strftime("%d.%m.%Y %H:%M")
-                
-                if info:
-                    sol_noua = info["ultima_solutie"]
-                    termen_nou = info["ultimul_termen"]
-                    comp_nou = info.get("complet", d_comp)
-                    
-                    if sol_noua != d_sol_veche:
-                        modificari_gasite += 1
-                        st.toast(f"Modificare în dosarul {d_nr}!", icon="🔔")
-                        ok, msg_mail = trimite_email_notificare(d_nr, d_client, info["institutie"], comp_nou, d_sol_veche, sol_noua)
-                        if ok:
-                            st.info(f"Notificare trimisă pentru dosarul {d_nr}.")
-                        else:
-                            st.warning(f"Modificare detectată la {d_nr}, dar emailul nu a plecat: {msg_mail}")
-                            
-                    c.execute("""
-                        UPDATE dosare 
-                        SET complet = %s, ultimul_termen = %s, ultima_solutie = %s, ultima_verificare = %s
-                        WHERE id = %s
-                    """, (comp_nou, termen_nou, sol_noua, acum, d_id))
-                progres.progress((idx + 1) / max(len(toate), 1))
-                
-            conn.commit()
-        conn.close()
-        if modificari_gasite == 0:
-            st.success("Toate dosarele au fost verificate. Nu au apărut modificări.")
-        else:
-            st.success(f"Verificare completă! {modificari_gasite} dosare au suferit modificări.")
+                        st.rerun()
 
     conn = get_connection()
-    try:
-        df_dosare = pd.read_sql("SELECT * FROM dosare", conn)
-    except Exception:
-        df_dosare = pd.DataFrame()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT 
+            d.id AS ID,
+            d.numar_dosar AS 'Număr Dosar',
+            COALESCE(c.denumire, d.client) AS 'Client',
+            d.sursa AS 'Sursă',
+            d.institutie AS 'Instanță / Autoritate',
+            d.complet AS 'Complet',
+            d.obiect AS 'Obiect',
+            d.ultimul_termen AS 'Termen / Decizie',
+            d.ultima_solutie AS 'Ultima Soluție consemnată',
+            d.ultima_verificare AS 'Ultima Verificare'
+        FROM dosare d
+        LEFT JOIN clienti c ON d.client_id = c.id
+        ORDER BY d.id DESC
+    """)
+    rows = cur.fetchall()
     conn.close()
-    
-    if not df_dosare.empty:
-        redenumiri = {
-            "numar_dosar": "Număr Dosar",
-            "complet": "Complet",
-            "client": "Client",
-            "sursa": "Sursă",
-            "institutie": "Instanță / Autoritate",
-            "obiect": "Obiect / Părți",
-            "ultimul_termen": "Termen / Dată Decizie",
-            "ultima_solutie": "Ultima Soluție / Stadiu",
-            "ultima_verificare": "Verificat la"
-        }
-        df_display = df_dosare.rename(columns=redenumiri)
-        cols_show = [v for k, v in redenumiri.items() if v in df_display.columns]
-        st.dataframe(df_display[cols_show], use_container_width=True, hide_index=True)
-        
+
+    if rows:
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
         with st.expander("🗑️ Șterge un dosar din monitorizare"):
-            col_nr = "Număr Dosar" if "Număr Dosar" in df_display.columns else "numar_dosar"
-            id_de_sters = st.selectbox("Selectează dosarul de șters", df_display[col_nr].tolist())
-            if st.button("Șterge dosarul selectat"):
+            dosar_del = st.selectbox("Alege dosarul", [r['Număr Dosar'] for r in rows])
+            if st.button("Confirmă Ștergerea"):
                 conn = get_connection()
-                with conn.cursor() as c:
-                    c.execute("DELETE FROM dosare WHERE numar_dosar = %s", (id_de_sters,))
+                cur = conn.cursor()
+                cur.execute("DELETE FROM dosare WHERE numar_dosar = %s", (dosar_del,))
                 conn.commit()
                 conn.close()
+                st.success("Dosarul a fost șters.")
                 st.rerun()
     else:
-        st.info("Nu există niciun dosar salvat în baza de date MySQL.")
+        st.info("Nu există dosare monitorizate în acest moment.")
 
-with tab2:
-    st.subheader("Inspectează toate ședințele, părțile sau înregistrările unui dosar")
-    c1, c2 = st.columns([2, 1])
-    nr_cautare = c1.text_input("Număr dosar (ex: 3504/C5/2026 sau 33730/197/2026):", "3504/C5/2026")
-    sursa_cautare = c2.selectbox("Sursă căutare", ["CNSC", "Portal.just.ro"])
+# === 2. CLIENȚI & CONTRACTE (CAJ) ===
+elif modul_ales == "👥 Clienți & Contracte (CAJ)":
+    st.title("👥 Gestiune Clienți & Contracte de Asistență (CAJ)")
     
-    if st.button("🔍 Căutare detalii complete"):
-        with st.spinner("Se interoghează portalul..."):
-            if sursa_cautare == "Portal.just.ro":
-                info = interogheaza_instanta(nr_cautare)
-            else:
-                info = interogheaza_cnsc(nr_cautare)
+    tab_cl, tab_caj = st.tabs(["📁 Bază de Date Clienți", "📄 Contracte de Asistență (CAJ)"])
+    
+    with tab_cl:
+        with st.expander("➕ Adaugă Client Nou", expanded=False):
+            with st.form("form_add_client", clear_on_submit=True):
+                col1, col2 = st.columns(2)
+                den = col1.text_input("Denumire / Nume Client *")
+                tip = col2.selectbox("Tip Persoană", ["Persoană Juridică", "Persoană Fizică"])
+                cui = col1.text_input("CUI / CNP")
+                reg = col2.text_input("Nr. Reg. Comerțului (J)")
+                adresa = col1.text_area("Adresă Sediu Social / Domiciliu")
+                obs = col2.text_area("Observații")
+                email = col1.text_input("Email Contact")
+                tel = col2.text_input("Telefon Contact")
                 
+                if st.form_submit_button("Salvează Clientul") and den:
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    try:
+                        cur.execute("""
+                            INSERT INTO clienti (denumire, tip_persoana, cui_cnp, reg_com, sediu_adresa, email_contact, telefon_contact, observatii)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (den, tip, cui, reg, adresa, email, tel, obs))
+                        conn.commit()
+                        st.success(f"Clientul '{den}' a fost înregistrat cu succes!")
+                    except Exception as e:
+                        st.error(f"Eroare: {e}")
+                    conn.close()
+                    st.rerun()
+                    
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id as ID, denumire as 'Denumire', tip_persoana as 'Tip', cui_cnp as 'CUI / CNP', email_contact as 'Email', telefon_contact as 'Telefon' FROM clienti ORDER BY denumire ASC")
+        clienti_df = cur.fetchall()
+        conn.close()
+        
+        if clienti_df:
+            st.dataframe(pd.DataFrame(clienti_df), use_container_width=True, hide_index=True)
+        else:
+            st.info("Niciun client înregistrat încă.")
+
+    with tab_caj:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
+        c_list = cur.fetchall()
+        conn.close()
+        
+        c_dict = {c['denumire']: c['id'] for c in c_list}
+        
+        with st.expander("➕ Înregistrează Contract Nou (CAJ)", expanded=False):
+            if not c_dict:
+                st.warning("Adaugă mai întâi un client în tab-ul 'Bază de Date Clienți'.")
+            else:
+                with st.form("form_add_caj", clear_on_submit=True):
+                    c1, c2, c3 = st.columns(3)
+                    serie_nr = c1.text_input("Serie și Număr CAJ * (ex: TL/2026/01)")
+                    dt_c = c2.date_input("Data Încheierii", value=date.today())
+                    client_caj = c3.selectbox("Client", list(c_dict.keys()))
+                    
+                    c4, c5, c6 = st.columns(3)
+                    tip_onor = c4.selectbox("Tip Onorariu", ["Orar", "Fix", "Succes"])
+                    val_onor = c5.number_input("Valoare Onorariu", min_value=0.0, step=50.0)
+                    moneda = c6.selectbox("Monedă", ["RON", "EUR"])
+                    
+                    obiect_caj = st.text_area("Obiectul asistenței juridice")
+                    
+                    if st.form_submit_button("Înregistrează Contractul") and serie_nr:
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        try:
+                            cur.execute("""
+                                INSERT INTO contracte (serie_numar, data_contract, client_id, obiect_contract, tip_onorariu, valoare_onorariu, moneda, status)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, 'Activ')
+                            """, (serie_nr, dt_c, c_dict[client_caj], obiect_caj, tip_onor, val_onor, moneda))
+                            conn.commit()
+                            st.success(f"Contractul {serie_nr} a fost salvat!")
+                        except Exception as e:
+                            st.error(f"Eroare: {e}")
+                        conn.close()
+                        st.rerun()
+                        
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT 
+                k.id AS ID,
+                k.serie_numar AS 'Serie/Număr CAJ',
+                k.data_contract AS 'Data',
+                c.denumire AS 'Client',
+                k.tip_onorariu AS 'Tip Onorariu',
+                CONCAT(k.valoare_onorariu, ' ', k.moneda) AS 'Valoare',
+                k.obiect_contract AS 'Obiect',
+                k.status AS 'Status'
+            FROM contracte k
+            JOIN clienti c ON k.client_id = c.id
+            ORDER BY k.id DESC
+        """)
+        caj_df = cur.fetchall()
+        conn.close()
+        
+        if caj_df:
+            st.dataframe(pd.DataFrame(caj_df), use_container_width=True, hide_index=True)
+        else:
+            st.info("Niciun contract înregistrat.")
+
+# === 3. PONTAJ & TIMESHEET ===
+elif modul_ales == "⏱️ Pontaj & Timesheet":
+    st.title("⏱️ Pontaj & Timesheet Ore Lucrate")
+    
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
+    c_list = cur.fetchall()
+    cur.execute("SELECT id, numar_dosar FROM dosare ORDER BY id DESC")
+    d_list = cur.fetchall()
+    conn.close()
+    
+    c_map = {c['denumire']: c['id'] for c in c_list}
+    d_map = {d['numar_dosar']: d['id'] for d in d_list}
+    
+    with st.expander("➕ Adaugă Pontaj Nou", expanded=True):
+        if not c_map:
+            st.warning("Adaugă mai întâi cel puțin un client.")
+        else:
+            with st.form("form_add_timesheet", clear_on_submit=True):
+                c1, c2, c3 = st.columns([1, 1.5, 1.5])
+                dt_p = c1.date_input("Data Activității", value=date.today())
+                cl_p = c2.selectbox("Client *", list(c_map.keys()))
+                ds_p = c3.selectbox("Dosar asociat (opțional)", ["(Niciun dosar)"] + list(d_map.keys()))
+                
+                c4, c5 = st.columns([1, 1])
+                ore = c4.number_input("Număr Ore (ex: 1.5 = 1h30m)", min_value=0.1, max_value=24.0, step=0.25, value=1.0)
+                tarif = c5.number_input("Tarif Orar (RON)", min_value=0.0, step=50.0, value=0.0)
+                
+                act = st.text_area("Descrierea activității prestate * (ex: Redactare întâmpinare, studiu dosar, deplasare instanță)")
+                
+                if st.form_submit_button("Înregistrează Orele") and act:
+                    dosar_id_val = d_map.get(ds_p, None) if ds_p != "(Niciun dosar)" else None
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO pontaj (data_activitate, utilizator_id, client_id, dosar_id, descriere_activitate, ore_lucrate, onorariu_orar)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (dt_p, id_utilizator_curent, c_map[cl_p], dosar_id_val, act, ore, tarif))
+                    conn.commit()
+                    conn.close()
+                    st.success("Activitatea a fost pontată cu succes!")
+                    st.rerun()
+
+    st.subheader(f"Istoric Pontaj ({utilizator_selectat})")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT 
+            p.id AS ID,
+            p.data_activitate AS 'Data',
+            u.nume AS 'Avocat',
+            c.denumire AS 'Client',
+            COALESCE(d.numar_dosar, '-') AS 'Dosar',
+            p.descriere_activitate AS 'Descriere Activitate',
+            p.ore_lucrate AS 'Ore',
+            CONCAT(ROUND(p.ore_lucrate * p.onorariu_orar, 2), ' RON') AS 'Total Estimativ'
+        FROM pontaj p
+        JOIN utilizatori u ON p.utilizator_id = u.id
+        JOIN clienti c ON p.client_id = c.id
+        LEFT JOIN dosare d ON p.dosar_id = d.id
+        ORDER BY p.data_activitate DESC, p.id DESC
+    """)
+    pontaj_df = cur.fetchall()
+    conn.close()
+    
+    if pontaj_df:
+        st.dataframe(pd.DataFrame(pontaj_df), use_container_width=True, hide_index=True)
+    else:
+        st.info("Nu există înregistrări de pontaj.")
+
+# === 4. SARCINI DE LUCRU (TASKS) ===
+elif modul_ales == "📌 Sarcini de Lucru (Tasks)":
+    st.title("📌 Sarcini de Lucru & Termene Echipă")
+    
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
+    cl_t = cur.fetchall()
+    conn.close()
+    cl_t_map = {c['denumire']: c['id'] for c in cl_t}
+    
+    with st.expander("➕ Creează o Sarcină Nouă", expanded=False):
+        with st.form("form_task", clear_on_submit=True):
+            col1, col2 = st.columns([2, 1])
+            titlu = col1.text_input("Titlu Sarcină * (ex: Depunere note de concluzii scrise)")
+            prioritate = col2.selectbox("Prioritate", ["Normală", "Ridicată", "Urgentă"])
+            
+            col3, col4, col5 = st.columns([1.5, 1, 1.5])
+            termen = col3.date_input("Termen Limită", value=date.today())
+            ora = col4.text_input("Ora Limită", value="16:00")
+            atribuit = col5.selectbox("Atribuit către", list(user_dict.keys()))
+            
+            client_asoc = st.selectbox("Client asociat (opțional)", ["(Niciunul)"] + list(cl_t_map.keys()))
+            detalii = st.text_area("Instrucțiuni / Detalii sarcină")
+            
+            if st.form_submit_button("Salvează Sarcina") and titlu:
+                c_id_t = cl_t_map.get(client_asoc, None) if client_asoc != "(Niciunul)" else None
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO sarcini (titlu, descriere, termen_limita, ora_limita, atribuit_lui, creat_de, client_id, prioritate, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'În lucru')
+                """, (titlu, detalii, termen, ora, user_dict[atribuit], id_utilizator_curent, c_id_t, prioritate))
+                conn.commit()
+                conn.close()
+                st.success("Sarcina a fost adăugată!")
+                st.rerun()
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT 
+            s.id AS ID,
+            s.titlu AS 'Titlu Sarcină',
+            s.termen_limita AS 'Termen Limită',
+            s.ora_limita AS 'Ora',
+            s.prioritate AS 'Prioritate',
+            u.nume AS 'Responsabil',
+            COALESCE(c.denumire, '-') AS 'Client',
+            s.status AS 'Status'
+        FROM sarcini s
+        JOIN utilizatori u ON s.atribuit_lui = u.id
+        LEFT JOIN clienti c ON s.client_id = c.id
+        ORDER BY s.termen_limita ASC, s.id DESC
+    """)
+    tasks_df = cur.fetchall()
+    conn.close()
+    
+    if tasks_df:
+        st.dataframe(pd.DataFrame(tasks_df), use_container_width=True, hide_index=True)
+        
+        with st.expander("Markează Sarcină Finalizată"):
+            id_task_fin = st.selectbox("Selectează sarcina", [f"{t['ID']} - {t['Titlu Sarcină']}" for t in tasks_df])
+            if st.button("Marchează ca Finalizată"):
+                tid = int(id_task_fin.split(" - ")[0])
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("UPDATE sarcini SET status = 'Finalizat' WHERE id = %s", (tid,))
+                conn.commit()
+                conn.close()
+                st.success("Sarcina a fost marcată ca finalizată!")
+                st.rerun()
+    else:
+        st.info("Nu există sarcini active.")
+
+# === 5. CĂUTARE PORTAL & ISTORIC ===
+elif modul_ales == "🔍 Căutare Portal & Istoric":
+    st.title("🔍 Căutare Rapidă Dosar & Inspectare Istoric")
+    c1, c2 = st.columns([2, 1])
+    nr_q = c1.text_input("Număr dosar:", "3504/C5/2026")
+    sursa_q = c2.selectbox("Sursă:", ["CNSC", "Portal.just.ro"])
+    
+    if st.button("Caută Detalii"):
+        with st.spinner("Se interoghează baza de date a instanței..."):
+            info = interogheaza_instanta(nr_q) if sursa_q == "Portal.just.ro" else interogheaza_cnsc(nr_q)
             if not info:
                 st.warning("Dosarul nu a fost găsit.")
             else:
-                st.markdown(f"**Număr:** `{info.get('numar_formatat', nr_cautare)}` | **Instanță:** {info['institutie']} | **Complet:** `{info.get('complet', '-')}` | **Obiect / Părți:** {info['obiect']}")
+                st.markdown(f"**Număr:** `{info.get('numar_formatat', nr_q)}` | **Instanță:** {info['institutie']} | **Complet:** `{info['complet']}`")
                 st.info(f"**Soluție / Stadiu actual:** {info['ultima_solutie']}")
-                if info["parti"]:
-                    st.write("**Părți:**")
-                    st.dataframe(pd.DataFrame(info["parti"]), use_container_width=True, hide_index=True)
-                if info["sedinte"]:
-                    st.write("**Istoric Ședințe / Înregistrări CNSC:**")
-                    st.dataframe(pd.DataFrame(info["sedinte"]), use_container_width=True, hide_index=True)
-
-with tab3:
-    st.subheader("Configurare Cont Expeditor cPanel (Stocat securizat în MySQL)")
-    
-    conn = get_connection()
-    with conn.cursor() as c:
-        c.execute("SELECT smtp_server, smtp_port, email_expeditor, parola_email, email_destinatar FROM setari_email WHERE id = 1")
-        setari = c.fetchone()
-    conn.close()
-    
-    v_server = setari["smtp_server"] if (setari and setari["smtp_server"]) else "toca-law.ro"
-    v_port = setari["smtp_port"] if (setari and setari["smtp_port"]) else 465
-    v_exp = setari["email_expeditor"] if (setari and setari["email_expeditor"]) else "actualizari@toca-law.ro"
-    v_pass = setari["parola_email"] if (setari and setari["parola_email"]) else ""
-    v_dest_default = "madalina.toca@toca-law.ro, andrei.smircea@toca-law.ro, andrei.toca@toca-law.ro"
-    v_dest = setari["email_destinatar"] if (setari and setari["email_destinatar"]) else v_dest_default
-
-    with st.form("form_email_cpanel"):
-        c1, c2 = st.columns([2, 1])
-        s_server = c1.text_input("Server SMTP cPanel", value=v_server)
-        s_port = c2.number_input("Port SMTP", value=int(v_port))
-        
-        s_exp = st.text_input("Adresă Expeditor", value=v_exp)
-        s_pass = st.text_input("Parola contului din cPanel", value=v_pass, type="password")
-        s_dest = st.text_area("Adresele destinatare (separate prin virgulă):", value=v_dest)
-        
-        col_s1, col_s2 = st.columns([1, 1])
-        salveaza_btn = col_s1.form_submit_button("💾 Salvează Setările în MySQL")
-        test_btn = col_s2.form_submit_button("📩 Trimite un email de test")
-        
-        if salveaza_btn:
-            conn = get_connection()
-            with conn.cursor() as c:
-                c.execute("""
-                    INSERT INTO setari_email (id, smtp_server, smtp_port, email_expeditor, parola_email, email_destinatar)
-                    VALUES (1, %s, %s, %s, %s, %s)
-                    ON DUPLICATE KEY UPDATE 
-                        smtp_server=VALUES(smtp_server),
-                        smtp_port=VALUES(smtp_port),
-                        email_expeditor=VALUES(email_expeditor),
-                        parola_email=VALUES(parola_email),
-                        email_destinatar=VALUES(email_destinatar)
-                """, (s_server, s_port, s_exp, s_pass, s_dest))
-            conn.commit()
-            conn.close()
-            st.success("Setările au fost salvate cu succes în MySQL!")
-
-        if test_btn:
-            with st.spinner("Se transmite emailul prin serverul cPanel..."):
-                ok, msg = trimite_email_notificare(
-                    "3504/C5/2026", 
-                    "CLIENT DE TEST S.R.L.", 
-                    "CNSC", 
-                    "C5", 
-                    "În așteptare", 
-                    "Admite contestația (Verificare conexiune MySQL & cPanel)"
-                )
-                if ok:
-                    st.success(f"Bravo! {msg}")
-                else:
-                    st.error(f"Eroare: {msg}")
+                if info.get('parti'):
+                    st.write("**Părți în dosar:**")
+                    st.dataframe(pd.DataFrame(info['parti']), use_container_width=True, hide_index=True)
+                if info.get('sedinte'):
+                    st.write("**Istoric Ședințe / Înregistrări:**")
+                    st.dataframe(pd.DataFrame(info['sedinte']), use_container_width=True, hide_index=True)
