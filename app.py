@@ -347,7 +347,7 @@ if modul_ales == "📋 Portofoliu Dosare":
             box-shadow: 0 4px 15px rgba(30, 58, 138, 0.3);
         ">
             <h1 style="margin: 0; font-size: 26px; font-weight: 700; color: #FFFFFF;">Evidența și monitorizarea litigiilor</h1>
-            <p style="margin: 5px 0 0 0; font-size: 14px; color: #E0E7FF;">Instanțe judecătorești (portal.just.ro), CNSC & Înalta Curte de Casație și Justiție (ICCJ)</p>
+            <p style="margin: 5px 0 0 0; font-size: 14px; color: #E0E7FF;">Instanțe judecătorești (portal.just.ro), CNSC și Înalta Curte de Casație și Justiție (ICCJ)</p>
         </div>
     """, unsafe_allow_html=True)
     
