@@ -101,7 +101,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- 1. CACHE IMAGINI ȘI LOGO (SE ÎNCARCĂ O SINGURĂ DATĂ ÎN RAM) ---
+# --- 1. CACHE IMAGINI ȘI LOGO ---
 @st.cache_data(show_spinner=False)
 def incarca_resurse_vizuale():
     def to_css_url(filename):
@@ -523,4 +523,468 @@ def trimite_alerta_abonament(client_nume, serie_caj, ore_incluse, ore_lucrate, p
     try:
         if smtp_port == 465:
             ctx = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(smtp_server, smtp_
+            server = smtplib.SMTP_SSL(
+                smtp_server,
+                smtp_port,
+                context=ctx,
+                timeout=20
+            )
+        else:
+            server = smtplib.SMTP(
+                smtp_server,
+                smtp_port,
+                timeout=20
+            )
+            server.starttls()
+        server.login(expeditor, parola)
+        server.sendmail(expeditor, destinatari_lista, msg.as_string())
+        server.quit()
+        return True, f"Alertă {prag_label} trimisă echipei ({', '.join(destinatari_lista)})!"
+    except Exception as e:
+        return False, f"Eroare trimitere email alertă: {e}"
+
+def verifica_abonament_dupa_pontaj(client_id, data_activitate):
+    luna_str = data_activitate.strftime("%Y-%m")
+    an_int = data_activitate.year
+    luna_int = data_activitate.month
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT k.id, k.serie_numar, k.numar_ore, k.tarif_depasire, k.moneda, k.alerta_80_luna, k.alerta_100_luna, c.denumire
+        FROM contracte k
+        JOIN clienti c ON k.client_id = c.id
+        WHERE k.client_id = %s AND k.tip_onorariu = 'Abonament' AND k.status = 'Activ' AND k.numar_ore > 0
+        ORDER BY k.id DESC LIMIT 1
+    """, (client_id,))
+    abonament = cur.fetchone()
+
+    if not abonament:
+        conn.close()
+        return []
+
+    cur.execute("""
+        SELECT COALESCE(SUM(ore_lucrate), 0) AS total_ore
+        FROM pontaj
+        WHERE client_id = %s AND YEAR(data_activitate) = %s AND MONTH(data_activitate) = %s
+    """, (client_id, an_int, luna_int))
+    res_ore = cur.fetchone()
+    total_ore = float(res_ore["total_ore"]) if res_ore else 0.0
+    ore_incluse = float(abonament["numar_ore"])
+    tarif_dep = float(abonament.get("tarif_depasire") or 0.0)
+    moneda_ab = abonament.get("moneda") or "EUR"
+    procent = (total_ore / ore_incluse) * 100.0 if ore_incluse > 0 else 0.0
+
+    mesaje_ui = []
+
+    if procent >= 100.0 and abonament.get("alerta_100_luna") != luna_str:
+        ok, msg = trimite_alerta_abonament(
+            abonament["denumire"], abonament["serie_numar"],
+            ore_incluse, total_ore, procent, "100%", luna_str, tarif_dep, moneda_ab
+        )
+        cur.execute("UPDATE contracte SET alerta_100_luna = %s, alerta_80_luna = %s WHERE id = %s", (luna_str, luna_str, abonament["id"]))
+        conn.commit()
+        mesaje_ui.append(("error", f"🚨 Plafon 100% atins/depășit pentru {abonament['denumire']} ({total_ore:.2f} / {ore_incluse:.2f} ore în {luna_str})! {msg}"))
+
+    elif procent >= 80.0 and abonament.get("alerta_80_luna") != luna_str:
+        ok, msg = trimite_alerta_abonament(
+            abonament["denumire"], abonament["serie_numar"],
+            ore_incluse, total_ore, procent, "80%", luna_str, tarif_dep, moneda_ab
+        )
+        cur.execute("UPDATE contracte SET alerta_80_luna = %s WHERE id = %s", (luna_str, abonament["id"]))
+        conn.commit()
+        mesaje_ui.append(("warning", f"⚠️ Prag 80% atins pentru {abonament['denumire']} ({total_ore:.2f} / {ore_incluse:.2f} ore în {luna_str})! {msg}"))
+
+    conn.close()
+    return mesaje_ui
+
+WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
+
+def interogheaza_portal_just(numar_dosar):
+    try:
+        client = Client(WSDL_URL)
+        rezultate = client.service.CautareDosare(numarDosar=numar_dosar.strip())
+        if not rezultate:
+            return None
+        d = rezultate[0]
+        institutie = str(d.institutie) if hasattr(d, 'institutie') else "-"
+        obiect = str(d.obiect) if hasattr(d, 'obiect') else "-"
+        stadiu = str(d.stadiuProcesualNume) if hasattr(d, 'stadiuProcesualNume') else ""
+        complet = "-"
+        ultimul_termen = "-"
+        ultima_solutie = f"Stadiu: {stadiu}"
+        sedinte_list = []
+        parti_list = []
+
+        if hasattr(d, 'parti') and d.parti and hasattr(d.parti, 'DosarParte'):
+            for p in d.parti.DosarParte:
+                parti_list.append({"Nume": p.nume, "Calitate": p.calitateParte})
+
+        if hasattr(d, 'sedinte') and d.sedinte and hasattr(d.sedinte, 'DosarSedinta'):
+            sedinte = d.sedinte.DosarSedinta
+            for s in sedinte:
+                dt_str = s.data.strftime("%d.%m.%Y") if hasattr(s.data, 'strftime') else str(s.data)
+                sol = s.solutieSumar or "În așteptare"
+                comp = s.complet or "-"
+                sedinte_list.append({
+                    "Data": dt_str,
+                    "Ora": s.ora or "-",
+                    "Complet": comp,
+                    "Soluție": sol,
+                    "Document": s.documentSedinta or "-"
+                })
+            if sedinte_list:
+                ultimul_termen = f"{sedinte_list[0]['Data']} ({sedinte_list[0]['Ora']})"
+                ultima_solutie = sedinte_list[0]['Soluție']
+                complet = sedinte_list[0]['Complet']
+
+        return {
+            "numar_formatat": str(d.numar),
+            "institutie": institutie,
+            "complet": complet,
+            "obiect": f"{obiect} ({stadiu})",
+            "ultimul_termen": ultimul_termen,
+            "ultima_solutie": ultima_solutie,
+            "parti": parti_list,
+            "sedinte": sedinte_list
+        }
+    except Exception:
+        return None
+
+def interogheaza_cnsc(input_dosar):
+    parti = input_dosar.strip().split("/")
+    nr_dosar = parti[0]
+    an_dosar = parti[-1] if len(parti) > 1 else str(date.today().year)
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(ignore_https_errors=True)
+            page = context.new_page()
+            page.goto("http://portal.cnsc.ro/istoricdosare.html", timeout=30000)
+            page.wait_for_timeout(2500)
+            page.fill("#ctl00_ctl04_ctl01_ctl02_ctl02_ctrl2", nr_dosar)
+            page.fill("#ctl00_ctl04_ctl01_ctl02_ctl03_ctrl3", an_dosar)
+            page.press("#ctl00_ctl04_ctl01_ctl02_ctl02_ctrl2", "Enter")
+            page.wait_for_timeout(3500)
+
+            rows = page.locator("tbody tr").all()
+            celule_gasite = None
+            for r in rows:
+                c = [td.inner_text().strip() for td in r.locator("td").all()]
+                if len(c) >= 6 and c[0] == nr_dosar:
+                    celule_gasite = c
+                    break
+            if not celule_gasite:
+                browser.close()
+                return None
+
+            contestator = celule_gasite[2]
+            autoritate = celule_gasite[3]
+            complet_cnsc = celule_gasite[4]
+            status_dosar = celule_gasite[5]
+
+            detalii_text = status_dosar
+            termen_decizie = "-"
+            sedinte_istoric = []
+
+            butoane = page.locator("tbody tr td a, tbody tr td input, tbody tr td button").all()
+            if butoane:
+                try:
+                    butoane[0].click()
+                    page.wait_for_timeout(2500)
+                    body_txt = page.locator("body").inner_text()
+                    for line in body_txt.splitlines():
+                        l_curat = line.strip()
+                        if "Solutie:" in l_curat or "Soluție:" in l_curat or "Decizie" in l_curat:
+                            detalii_text = l_curat
+                        if "Data decizie" in l_curat:
+                            termen_decizie = l_curat
+                except Exception:
+                    pass
+
+            browser.close()
+            return {
+                "numar_formatat": f"{nr_dosar}/{complet_cnsc}/{an_dosar}",
+                "institutie": "CNSC",
+                "complet": complet_cnsc,
+                "obiect": f"{contestator} vs. {autoritate}",
+                "ultimul_termen": termen_decizie,
+                "ultima_solutie": detalii_text,
+                "parti": [
+                    {"Nume": contestator, "Calitate": "Contestator"},
+                    {"Nume": autoritate, "Calitate": "Autoritate Contractantă"}
+                ],
+                "sedinte": sedinte_istoric
+            }
+    except Exception:
+        return None
+
+def interogheaza_iccj(numar_dosar):
+    return interogheaza_portal_just(numar_dosar)
+
+def executa_interogare(numar_dosar, sursa):
+    if sursa == "CNSC":
+        return interogheaza_cnsc(numar_dosar)
+    elif sursa == "ICCJ (scj.ro)":
+        return interogheaza_iccj(numar_dosar)
+    else:
+        return interogheaza_portal_just(numar_dosar)
+
+# --- BARA LATERALĂ & NAVIGARE ---
+icons_css, logo_html = incarca_resurse_vizuale()
+
+st.markdown(f"""
+<style>
+    :root {{
+        --icon-dosare: {icons_css['dosare']};
+        --icon-clienti: {icons_css['clienti']};
+        --icon-pontaj: {icons_css['pontaj']};
+        --icon-sarcini: {icons_css['sarcini']};
+        --icon-cautare: {icons_css['cautare']};
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+if logo_html:
+    st.sidebar.markdown(logo_html, unsafe_allow_html=True)
+
+useri_db = get_utilizatori_cached()
+user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Avocat Coordonator": 1}
+utilizator_selectat = st.sidebar.selectbox(
+    "Utilizator",
+    list(user_dict.keys()),
+    key="sel_user_sidebar",
+    label_visibility="collapsed"
+)
+id_utilizator_curent = user_dict[utilizator_selectat]
+
+if "modul_ales" not in st.session_state:
+    st.session_state.modul_ales = "Dosare"
+
+optiuni_meniu = ["Dosare", "Clienți", "Pontaj", "Sarcini", "Căutare"]
+for idx_m, nume_modul in enumerate(optiuni_meniu, start=1):
+    st.sidebar.markdown(
+        f'<span class="nav-marker-{idx_m}" style="display:none;"></span>',
+        unsafe_allow_html=True
+    )
+    este_activ = (st.session_state.modul_ales == nume_modul)
+    if st.sidebar.button(
+        nume_modul,
+        key=f"nav_{idx_m}",
+        type="primary" if este_activ else "secondary",
+        use_container_width=True
+    ):
+        st.session_state.modul_ales = nume_modul
+        st.rerun()
+
+modul_ales = st.session_state.modul_ales
+
+# === 1. PORTOFOLIU DOSARE ===
+if modul_ales == "Dosare":
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">📋 Portofoliu Dosare Monitorizate</h2>
+        </div>
+    """, unsafe_allow_html=True)
+
+    lista_clienti = get_clienti_cached()
+    client_map = {c['denumire']: c['id'] for c in lista_clienti} if lista_clienti else {}
+
+    with st.expander("➕ Adaugă un Dosar Nou în Monitorizare", expanded=False):
+        with st.form("form_add_dosar", clear_on_submit=True):
+            c1, c2, c3 = st.columns([1.5, 1, 1.5])
+            nr_nou = c1.text_input("Număr Dosar * (ex: 1234/2/2026 sau 3504/C5/2026)")
+            sursa_noua = c2.selectbox("Sursă Portal", ["Portal.just.ro", "ICCJ (scj.ro)", "CNSC"])
+            opt_clienti = ["(Fără client / Adaugă manual)"] + list(client_map.keys())
+            client_selectat = c3.selectbox("Client din Baza de Date", opt_clienti)
+            client_manual = st.text_input("Sau scrie nume client rapid (dacă nu e în listă):")
+
+            if st.form_submit_button("Salvează și Interoghează Portalul") and nr_nou:
+                with st.spinner("Se caută datele pe portal..."):
+                    info = executa_interogare(nr_nou, sursa_noua)
+                    nr_salvat = info["numar_formatat"] if info and info.get("numar_formatat") else nr_nou.strip()
+                    inst = info["institutie"] if info else "-"
+                    comp = info["complet"] if info else "-"
+                    ob = info["obiect"] if info else "-"
+                    term = info["ultimul_termen"] if info else "-"
+                    sol = info["ultima_solutie"] if info else "În așteptare"
+                    now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+                    c_id_val = client_map.get(client_selectat) if client_selectat != "(Fără client / Adaugă manual)" else None
+                    c_nume_val = client_selectat if c_id_val else (client_manual.strip() or "-")
+
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO dosare (numar_dosar, sursa, client, client_id, institutie, complet, obiect, ultimul_termen, ultima_solutie, ultima_verificare)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON DUPLICATE KEY UPDATE
+                            client=VALUES(client), client_id=VALUES(client_id), institutie=VALUES(institutie),
+                            complet=VALUES(complet), obiect=VALUES(obiect), ultimul_termen=VALUES(ultimul_termen),
+                            ultima_solutie=VALUES(ultima_solutie), ultima_verificare=VALUES(ultima_verificare)
+                    """, (nr_salvat, sursa_noua, c_nume_val, c_id_val, inst, comp, ob, term, sol, now_str))
+                    conn.commit()
+                    conn.close()
+                    goleste_cache_date()
+                    st.success(f"Dosarul {nr_salvat} a fost salvat!")
+                    st.rerun()
+
+    if st.button("🔄 Verifică TOATE dosarele acum"):
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT id, numar_dosar, sursa FROM dosare")
+        toate = cur.fetchall()
+        bar = st.progress(0)
+        for idx, d_row in enumerate(toate):
+            info = executa_interogare(d_row['numar_dosar'], d_row['sursa'])
+            if info:
+                now_str = datetime.now().strftime("%d.%m.%Y %H:%M")
+                cur.execute("""
+                    UPDATE dosare
+                    SET institutie=%s, complet=%s, obiect=%s, ultimul_termen=%s, ultima_solutie=%s, ultima_verificare=%s
+                    WHERE id=%s
+                """, (info['institutie'], info['complet'], info['obiect'], info['ultimul_termen'], info['ultima_solutie'], now_str, d_row['id']))
+                conn.commit()
+            bar.progress((idx + 1) / max(len(toate), 1))
+        conn.close()
+        goleste_cache_date()
+        st.success("Toate dosarele au fost actualizate!")
+        st.rerun()
+
+    dosare_list = get_dosare_cached()
+
+    if dosare_list:
+        st.dataframe(pd.DataFrame(dosare_list), use_container_width=True, hide_index=True)
+        with st.expander("🗑️ Șterge un dosar din monitorizare"):
+            opt_del_d = [f"{d['ID']} - {d['Număr Dosar']} ({d['Client']})" for d in dosare_list]
+            d_selectat = st.selectbox("Selectează dosarul de șters:", opt_del_d)
+            if st.button("Confirmă Ștergerea Dosarului"):
+                d_id = int(d_selectat.split(" - ")[0])
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("DELETE FROM pontaj WHERE dosar_id = %s", (d_id,))
+                cur.execute("DELETE FROM sarcini WHERE dosar_id = %s", (d_id,))
+                cur.execute("DELETE FROM dosare WHERE id = %s", (d_id,))
+                conn.commit()
+                conn.close()
+                goleste_cache_date()
+                st.success("Dosarul a fost șters!")
+                st.rerun()
+    else:
+        st.info("Niciun dosar înregistrat în monitorizare.")
+
+# === 2. CLIENȚI & CONTRACTE (CAJ) ===
+elif modul_ales == "Clienți":
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">👥 Gestiune Clienți & Contracte de Asistență Juridică (CAJ)</h2>
+        </div>
+    """, unsafe_allow_html=True)
+
+    tab_cl, tab_caj = st.tabs(["🏢 Bază de Date Clienți", "📄 Contracte de Asistență (CAJ)"])
+
+    with tab_cl:
+        with st.expander("➕ Adaugă Client Nou", expanded=False):
+            with st.form("form_add_client", clear_on_submit=True):
+                c1, c2, c3 = st.columns([2, 1, 1])
+                den = c1.text_input("Denumire Client / Nume Complet *")
+                tip_c = c2.selectbox("Tip", ["PJ (Companie)", "PF (Persoană Fizică)"])
+                cui = c3.text_input("CUI / CNP")
+
+                c4, c5, c6 = st.columns([1.5, 1, 1.5])
+                rep = c4.text_input("Reprezentant Legal / Contact")
+                tel = c5.text_input("Telefon")
+                em = c6.text_input("Email")
+
+                adr = st.text_input("Adresă / Sediu Social")
+
+                if st.form_submit_button("Salvează Clientul") and den:
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO clienti (denumire, tip_client, cui_cnp, adresa, reprezentant, telefon, email)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (den, tip_c, cui, adr, rep, tel, em))
+                    conn.commit()
+                    conn.close()
+                    goleste_cache_date()
+                    st.success(f"Clientul '{den}' a fost adăugat!")
+                    st.rerun()
+
+        clienti_raw = get_clienti_cached()
+
+        if clienti_raw:
+            clienti_df = [
+                {
+                    "ID": c["id"],
+                    "Denumire Client": c["denumire"],
+                    "Tip": c["tip_client"],
+                    "CUI/CNP": c["cui_cnp"],
+                    "Contact": c["reprezentant"],
+                    "Telefon": c["telefon"],
+                    "Email": c["email"],
+                    "Adresă": c["adresa"],
+                }
+                for c in clienti_raw
+            ]
+            st.dataframe(pd.DataFrame(clienti_df), use_container_width=True, hide_index=True)
+            with st.expander("🗑️ Șterge un client din baza de date"):
+                opt_del_c = [f"{c['ID']} - {c['Denumire Client']}" for c in clienti_df]
+                cl_de_sters = st.selectbox("Selectează clientul pe care dorești să-l ștergi:", opt_del_c)
+                st.warning("Atenție: Ștergerea clientului va elimina și contractele/pontajele asociate acestuia, iar dosarele îi vor fi deconectate.")
+                if st.button("Confirmă Ștergerea Clientului", type="secondary"):
+                    c_id_del = int(cl_de_sters.split(" - ")[0])
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    try:
+                        cur.execute("UPDATE dosare SET client_id = NULL WHERE client_id = %s", (c_id_del,))
+                        cur.execute("DELETE FROM pontaj WHERE client_id = %s", (c_id_del,))
+                        cur.execute("DELETE FROM sarcini WHERE client_id = %s", (c_id_del,))
+                        cur.execute("DELETE FROM contracte WHERE client_id = %s", (c_id_del,))
+                        cur.execute("DELETE FROM clienti WHERE id = %s", (c_id_del,))
+                        conn.commit()
+                        goleste_cache_date()
+                        st.success(f"Clientul '{cl_de_sters}' a fost șters!")
+                    except Exception as e:
+                        st.error(f"Eroare la ștergere: {e}")
+                    conn.close()
+                    st.rerun()
+        else:
+            st.info("Niciun client înregistrat momentan.")
+
+    with tab_caj:
+        c_list = get_clienti_cached()
+        c_dict = {c['denumire']: c['id'] for c in c_list} if c_list else {}
+
+        with st.expander("➕ Înregistrează Contract Nou (CAJ)", expanded=False):
+            if not c_dict:
+                st.warning("Adaugă mai întâi un client în tab-ul 'Bază de Date Clienți'.")
+            else:
+                with st.form("form_add_caj", clear_on_submit=True):
+                    c1, c2, c3 = st.columns(3)
+                    serie_nr = c1.text_input("Serie și Număr CAJ * (ex: TL/2026/01)")
+                    dt_c = c2.date_input("Data Încheierii", value=date.today())
+                    client_caj = c3.selectbox("Client", list(c_dict.keys()))
+
+                    c4, c5, c6, c7, c8 = st.columns([1.2, 1, 1, 1, 0.8])
+                    tip_onor = c4.selectbox("Tip Onorariu", ["Abonament", "Orar", "Fix", "Succes"])
+                    val_onor = c5.number_input("Tarif Orar / Valoare", min_value=0.0, step=10.0)
+                    nr_ore_abon = c6.number_input("Număr ore (Abonament)", min_value=0.0, step=1.0, value=0.0)
+                    tarif_dep = c7.number_input("Tarif depășire / h", min_value=0.0, step=10.0, value=0.0)
+                    moneda = c8.selectbox("Monedă", ["EUR", "RON"])
+
+                    obiect_caj = st.text_area("Obiectul asistenței juridice")
+
+                    if st.form_submit_button("Înregistrează Contractul") and serie_nr:
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        try:
+                            cur.execute("""
+                                INSERT INTO contracte (
+                                    serie_numar, data_contract, client_id, obiect_contract,
+                                    tip_onorariu, valoare_onorariu, tarif_depasire, moneda, numar_ore, status
+                                )
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'Activ')
+                            """, (
+                                serie_nr.strip(), dt_c, c_dict[client_caj], obiect_caj,
+                                tip_onor
