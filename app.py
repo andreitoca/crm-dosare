@@ -19,51 +19,93 @@ st.set_page_config(
 
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
-# --- STILIZARE MENIU LATERAL (CASETE ALBASTRU ROYAL) ---
+# --- STILIZARE MENIU LATERAL (TIP RAIL CU PICTOGRAMĂ SUS ȘI TEXT JOS) ---
 st.markdown("""
 <style>
-    /* Ascunde cerculețul radio standard */
+    /* Fundalul barei laterale în nuanța albastru închis petrol din model */
+    section[data-testid="stSidebar"] {
+        background-color: #0B2538 !important;
+        min-width: 115px !important;
+        max-width: 135px !important;
+    }
+
+    /* Ajustare spațiu interior bară laterală */
+    section[data-testid="stSidebar"] > div:first-child {
+        padding: 15px 6px !important;
+        background-color: #0B2538 !important;
+    }
+
+    /* Ascunde eticheta "Navigare:" și cerculețul radio */
+    section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"],
     section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
         display: none !important;
     }
 
-    /* Spațiere între casete */
+    /* Elimină spațierea dintre elementele meniului */
     section[data-testid="stSidebar"] div[role="radiogroup"] {
-        gap: 10px !important;
-    }
-
-    /* Aspectul fiecărei casete (Albastru Royal) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label {
-        background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%) !important;
-        border: 1px solid #2563EB !important;
-        border-radius: 8px !important;
-        padding: 12px 15px !important;
+        gap: 2px !important;
         width: 100% !important;
-        cursor: pointer !important;
-        transition: all 0.2s ease-in-out !important;
-        box-shadow: 0 2px 5px rgba(30, 58, 138, 0.2) !important;
     }
 
-    /* Textul alb din interiorul casetelor */
+    /* Aspectul fiecărui element de meniu (inactiv) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label {
+        background-color: transparent !important;
+        border: none !important;
+        border-radius: 6px !important;
+        padding: 14px 4px !important;
+        width: 100% !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        text-align: center !important;
+        cursor: pointer !important;
+        transition: background-color 0.2s ease !important;
+    }
+
+    /* Textul și pictograma (deasupra textului prin white-space: pre-line) */
     section[data-testid="stSidebar"] div[role="radiogroup"] label p {
-        color: #FFFFFF !important;
-        font-weight: 600 !important;
-        font-size: 14px !important;
+        color: #94B0C2 !important;
+        font-size: 12px !important;
+        font-weight: 500 !important;
+        line-height: 1.4 !important;
+        white-space: pre-line !important;
+        text-align: center !important;
         margin: 0 !important;
     }
 
-    /* Efect la trecerea mouse-ului peste casetă (Hover) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-        background: linear-gradient(135deg, #172554 0%, #1D4ED8 100%) !important;
-        transform: translateX(4px) !important;
-        border-color: #D4AF37 !important;
+    /* Mărirea pictogramei de pe primul rând */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label p::first-line {
+        font-size: 22px !important;
     }
 
-    /* Evidențierea casetei selectate (Active) cu bordură aurie */
+    /* Efect la trecerea mouse-ului (Hover) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+        background-color: rgba(255, 255, 255, 0.06) !important;
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover p {
+        color: #FFFFFF !important;
+    }
+
+    /* Elementul selectat (Activ) - Verde smarald ca în model */
     section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
-        background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 100%) !important;
-        border: 2px solid #D4AF37 !important;
-        box-shadow: 0 4px 10px rgba(212, 175, 55, 0.3) !important;
+        background-color: #00B87C !important;
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
+        color: #FFFFFF !important;
+        font-weight: 700 !important;
+    }
+
+    /* Stilizare discretă pentru selectorul de utilizator din bara îngustă */
+    section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
+        background-color: #13354D !important;
+        border-color: #1F4E6E !important;
+        color: #FFFFFF !important;
+        font-size: 11px !important;
+    }
+    section[data-testid="stSidebar"] hr {
+        border-color: rgba(255, 255, 255, 0.1) !important;
+        margin: 10px 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
