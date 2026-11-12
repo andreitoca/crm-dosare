@@ -19,7 +19,56 @@ st.set_page_config(
 
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
-# --- 1. INTEROGARE PORTAL.JUST.RO (Judecătorii, Tribunale, Curți de Apel) ---
+# --- STILIZARE MENIU LATERAL (CASETE ALBASTRU ROYAL) ---
+st.markdown("""
+<style>
+    /* Ascunde cerculețul radio standard */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
+        display: none !important;
+    }
+
+    /* Spațiere între casete */
+    section[data-testid="stSidebar"] div[role="radiogroup"] {
+        gap: 10px !important;
+    }
+
+    /* Aspectul fiecărei casete (Albastru Royal) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label {
+        background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%) !important;
+        border: 1px solid #2563EB !important;
+        border-radius: 8px !important;
+        padding: 12px 15px !important;
+        width: 100% !important;
+        cursor: pointer !important;
+        transition: all 0.2s ease-in-out !important;
+        box-shadow: 0 2px 5px rgba(30, 58, 138, 0.2) !important;
+    }
+
+    /* Textul alb din interiorul casetelor */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label p {
+        color: #FFFFFF !important;
+        font-weight: 600 !important;
+        font-size: 14px !important;
+        margin: 0 !important;
+    }
+
+    /* Efect la trecerea mouse-ului peste casetă (Hover) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+        background: linear-gradient(135deg, #172554 0%, #1D4ED8 100%) !important;
+        transform: translateX(4px) !important;
+        border-color: #D4AF37 !important;
+    }
+
+    /* Evidențierea casetei selectate (Active) cu bordură aurie */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+        background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 100%) !important;
+        border: 2px solid #D4AF37 !important;
+        box-shadow: 0 4px 10px rgba(212, 175, 55, 0.3) !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# --- 1. INTEROGARE PORTAL.JUST.RO ---
 def interogheaza_instanta(numar_dosar):
     try:
         client = Client(WSDL_URL)
@@ -208,19 +257,16 @@ with sync_playwright() as p:
     page.goto("https://www.scj.ro/738/Cautare-dosare-si-parti", timeout=35000)
     page.wait_for_timeout(2000)
     
-    # Completăm numărul de dosar în câmpul de căutare
     page.fill("input[name*='NumarDosar'], #NumarDosar, input[type='text']", nr_cautat)
     page.press("input[name*='NumarDosar'], #NumarDosar, input[type='text']", "Enter")
     page.wait_for_timeout(3500)
     
-    # Verificăm rezultatele
     rows = page.locator("table tr").all()
     if len(rows) <= 1:
         print("REZULTAT_JSON:" + json.dumps({"found": False}))
         browser.close()
         sys.exit(0)
         
-    # Deschidem link-ul de detalii din primul rezultat
     links = page.locator("table tr td a").all()
     if links:
         links[0].click()
@@ -232,7 +278,6 @@ with sync_playwright() as p:
     sectie = "Înalta Curte de Casație și Justiție"
     obiect = "-"
     complet = "-"
-    stadiu = "În procedură de filtru / Pe rol"
     termen = "-"
     solutie = "Fără soluție consemnată încă"
     parti = []
@@ -247,7 +292,7 @@ with sync_playwright() as p:
             complet = lines[i+1]
         elif "Termen:" in line and i + 1 < len(lines):
             termen = lines[i+1]
-        elif "Soluţie:" in line or "Soluție:" in line and i + 1 < len(lines):
+        elif ("Soluţie:" in line or "Soluție:" in line) and i + 1 < len(lines):
             solutie = lines[i+1]
             
     out = {
@@ -279,7 +324,6 @@ with sync_playwright() as p:
                 if d.get("found"):
                     return d
         
-        # Fallback HTTP direct pe scj.ro dacă Playwright a fost întârziat
         url = f"https://www.scj.ro/738/Cautare-dosare-si-parti?NumarDosar={clean_nr}"
         resp = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
         if resp.status_code == 200 and clean_nr in resp.text:
@@ -306,54 +350,33 @@ def executa_interogare(numar, sursa):
         return interogheaza_iccj(numar)
     return None
 
-# --- STILIZARE MENIU LATERAL (CASETE ALBASTRU ROYAL) ---
-st.markdown("""
-<style>
-    /* Ascunde cerculețul radio standard */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
-        display: none !important;
-    }
+# --- BARA LATERALĂ & NAVIGARE ---
+try:
+    st.sidebar.image("220420_[1000xpx]_LOGO_AT.png", use_container_width=True)
+except Exception:
+    pass
 
-    /* Spațiere între casete */
-    section[data-testid="stSidebar"] div[role="radiogroup"] {
-        gap: 10px !important;
-    }
+conn = get_connection()
+cur = conn.cursor()
+cur.execute("SELECT id, nume, rol FROM utilizatori WHERE activ = 1 ORDER BY id ASC")
+useri_db = cur.fetchall()
+conn.close()
 
-    /* Aspectul fiecărei casete (Albastru Royal) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label {
-        background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%) !important;
-        border: 1px solid #2563EB !important;
-        border-radius: 8px !important;
-        padding: 12px 15px !important;
-        width: 100% !important;
-        cursor: pointer !important;
-        transition: all 0.2s ease-in-out !important;
-        box-shadow: 0 2px 5px rgba(30, 58, 138, 0.2) !important;
-    }
+user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Avocat Coordonator": 1}
+utilizator_selectat = st.sidebar.selectbox("👤 Utilizator conectat:", list(user_dict.keys()))
+id_utilizator_curent = user_dict[utilizator_selectat]
 
-    /* Textul alb din interiorul casetelor */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label p {
-        color: #FFFFFF !important;
-        font-weight: 600 !important;
-        font-size: 14px !important;
-        margin: 0 !important;
-    }
-
-    /* Efect la trecerea mouse-ului peste casetă (Hover) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-        background: linear-gradient(135deg, #172554 0%, #1D4ED8 100%) !important;
-        transform: translateX(4px) !important;
-        border-color: #D4AF37 !important;
-    }
-
-    /* Evidențierea casetei selectate (Active) cu bordură aurie */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
-        background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 100%) !important;
-        border: 2px solid #D4AF37 !important;
-        box-shadow: 0 4px 10px rgba(212, 175, 55, 0.3) !important;
-    }
-</style>
-""", unsafe_allow_html=True)
+st.sidebar.markdown("---")
+modul_ales = st.sidebar.radio(
+    "Navigare:",
+    [
+        "📋 Portofoliu Dosare",
+        "👥 Clienți & Contracte (CAJ)",
+        "⏱️ Pontaj & Timesheet",
+        "📌 Sarcini de Lucru (Tasks)",
+        "🔍 Căutare Portal & Istoric"
+    ]
+)
 
 # === 1. PORTOFOLIU DOSARE ===
 if modul_ales == "📋 Portofoliu Dosare":
@@ -368,7 +391,7 @@ if modul_ales == "📋 Portofoliu Dosare":
             box-shadow: 0 4px 15px rgba(30, 58, 138, 0.3);
         ">
             <h1 style="margin: 0; font-size: 26px; font-weight: 700; color: #FFFFFF;">Evidența și monitorizarea litigiilor</h1>
-            <p style="margin: 5px 0 0 0; font-size: 14px; color: #E0E7FF;">Instanțe judecătorești (portal.just.ro), CNSC și Înalta Curte de Casație și Justiție (ICCJ)</p>
+            <p style="margin: 5px 0 0 0; font-size: 14px; color: #E0E7FF;">Instanțe judecătorești (portal.just.ro), CNSC & Înalta Curte de Casație și Justiție (ICCJ)</p>
         </div>
     """, unsafe_allow_html=True)
     
@@ -537,226 +560,4 @@ elif modul_ales == "👥 Clienți & Contracte (CAJ)":
                     
                     c4, c5, c6 = st.columns(3)
                     tip_onor = c4.selectbox("Tip Onorariu", ["Orar", "Fix", "Succes"])
-                    val_onor = c5.number_input("Valoare Onorariu", min_value=0.0, step=50.0)
-                    moneda = c6.selectbox("Monedă", ["RON", "EUR"])
-                    
-                    obiect_caj = st.text_area("Obiectul asistenței juridice")
-                    
-                    if st.form_submit_button("Înregistrează Contractul") and serie_nr:
-                        conn = get_connection()
-                        cur = conn.cursor()
-                        try:
-                            cur.execute("""
-                                INSERT INTO contracte (serie_numar, data_contract, client_id, obiect_contract, tip_onorariu, valoare_onorariu, moneda, status)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, 'Activ')
-                            """, (serie_nr, dt_c, c_dict[client_caj], obiect_caj, tip_onor, val_onor, moneda))
-                            conn.commit()
-                            st.success(f"Contractul {serie_nr} a fost salvat!")
-                        except Exception as e:
-                            st.error(f"Eroare: {e}")
-                        conn.close()
-                        st.rerun()
-                        
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT 
-                k.id AS ID,
-                k.serie_numar AS 'Serie/Număr CAJ',
-                k.data_contract AS 'Data',
-                c.denumire AS 'Client',
-                k.tip_onorariu AS 'Tip Onorariu',
-                CONCAT(k.valoare_onorariu, ' ', k.moneda) AS 'Valoare',
-                k.obiect_contract AS 'Obiect',
-                k.status AS 'Status'
-            FROM contracte k
-            JOIN clienti c ON k.client_id = c.id
-            ORDER BY k.id DESC
-        """)
-        caj_df = cur.fetchall()
-        conn.close()
-        
-        if caj_df:
-            st.dataframe(pd.DataFrame(caj_df), use_container_width=True, hide_index=True)
-        else:
-            st.info("Niciun contract înregistrat.")
-
-# === 3. PONTAJ & TIMESHEET ===
-elif modul_ales == "⏱️ Pontaj & Timesheet":
-    st.markdown("""
-        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
-            <h2 style="margin: 0; font-size: 22px; color: white;">⏱️ Pontaj & Timesheet Ore Lucrate</h2>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
-    c_list = cur.fetchall()
-    cur.execute("SELECT id, numar_dosar FROM dosare ORDER BY id DESC")
-    d_list = cur.fetchall()
-    conn.close()
-    
-    c_map = {c['denumire']: c['id'] for c in c_list}
-    d_map = {d['numar_dosar']: d['id'] for d in d_list}
-    
-    with st.expander("➕ Adaugă Pontaj Nou", expanded=True):
-        if not c_map:
-            st.warning("Adaugă mai întâi cel puțin un client în sistem.")
-        else:
-            with st.form("form_add_timesheet", clear_on_submit=True):
-                c1, c2, c3 = st.columns([1, 1.5, 1.5])
-                dt_p = c1.date_input("Data Activității", value=date.today())
-                cl_p = c2.selectbox("Client *", list(c_map.keys()))
-                ds_p = c3.selectbox("Dosar asociat (opțional)", ["(Niciun dosar)"] + list(d_map.keys()))
-                
-                c4, c5 = st.columns([1, 1])
-                ore = c4.number_input("Număr Ore (ex: 1.5 = 1h30m)", min_value=0.1, max_value=24.0, step=0.25, value=1.0)
-                tarif = c5.number_input("Tarif Orar (RON)", min_value=0.0, step=50.0, value=0.0)
-                
-                act = st.text_area("Descrierea activității prestate *")
-                
-                if st.form_submit_button("Înregistrează Orele") and act:
-                    dosar_id_val = d_map.get(ds_p, None) if ds_p != "(Niciun dosar)" else None
-                    conn = get_connection()
-                    cur = conn.cursor()
-                    cur.execute("""
-                        INSERT INTO pontaj (data_activitate, utilizator_id, client_id, dosar_id, descriere_activitate, ore_lucrate, onorariu_orar)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (dt_p, id_utilizator_curent, c_map[cl_p], dosar_id_val, act, ore, tarif))
-                    conn.commit()
-                    conn.close()
-                    st.success("Activitatea a fost pontată cu succes!")
-                    st.rerun()
-
-    st.subheader(f"Istoric Pontaj ({utilizator_selectat})")
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT 
-            p.id AS ID,
-            p.data_activitate AS 'Data',
-            u.nume AS 'Avocat',
-            c.denumire AS 'Client',
-            COALESCE(d.numar_dosar, '-') AS 'Dosar',
-            p.descriere_activitate AS 'Descriere Activitate',
-            p.ore_lucrate AS 'Ore',
-            CONCAT(ROUND(p.ore_lucrate * p.onorariu_orar, 2), ' RON') AS 'Total Estimativ'
-        FROM pontaj p
-        JOIN utilizatori u ON p.utilizator_id = u.id
-        JOIN clienti c ON p.client_id = c.id
-        LEFT JOIN dosare d ON p.dosar_id = d.id
-        ORDER BY p.data_activitate DESC, p.id DESC
-    """)
-    pontaj_df = cur.fetchall()
-    conn.close()
-    
-    if pontaj_df:
-        st.dataframe(pd.DataFrame(pontaj_df), use_container_width=True, hide_index=True)
-    else:
-        st.info("Nu există înregistrări de pontaj.")
-
-# === 4. SARCINI DE LUCRU (TASKS) ===
-elif modul_ales == "📌 Sarcini de Lucru (Tasks)":
-    st.markdown("""
-        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
-            <h2 style="margin: 0; font-size: 22px; color: white;">📌 Sarcini de Lucru & Termene Echipă</h2>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
-    cl_t = cur.fetchall()
-    conn.close()
-    cl_t_map = {c['denumire']: c['id'] for c in cl_t}
-    
-    with st.expander("➕ Creează o Sarcină Nouă", expanded=False):
-        with st.form("form_task", clear_on_submit=True):
-            col1, col2 = st.columns([2, 1])
-            titlu = col1.text_input("Titlu Sarcină *")
-            prioritate = col2.selectbox("Prioritate", ["Normală", "Ridicată", "Urgentă"])
-            
-            col3, col4, col5 = st.columns([1.5, 1, 1.5])
-            termen = col3.date_input("Termen Limită", value=date.today())
-            ora = col4.text_input("Ora Limită", value="16:00")
-            atribuit = col5.selectbox("Atribuit către", list(user_dict.keys()))
-            
-            client_asoc = st.selectbox("Client asociat (opțional)", ["(Niciunul)"] + list(cl_t_map.keys()))
-            detalii = st.text_area("Instrucțiuni / Detalii sarcină")
-            
-            if st.form_submit_button("Salvează Sarcina") and titlu:
-                c_id_t = cl_t_map.get(client_asoc, None) if client_asoc != "(Niciunul)" else None
-                conn = get_connection()
-                cur = conn.cursor()
-                cur.execute("""
-                    INSERT INTO sarcini (titlu, descriere, termen_limita, ora_limita, atribuit_lui, creat_de, client_id, prioritate, status)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'În lucru')
-                """, (titlu, detalii, termen, ora, user_dict[atribuit], id_utilizator_curent, c_id_t, prioritate))
-                conn.commit()
-                conn.close()
-                st.success("Sarcina a fost adăugată!")
-                st.rerun()
-
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT 
-            s.id AS ID,
-            s.titlu AS 'Titlu Sarcină',
-            s.termen_limita AS 'Termen Limită',
-            s.ora_limita AS 'Ora',
-            s.prioritate AS 'Prioritate',
-            u.nume AS 'Responsabil',
-            COALESCE(c.denumire, '-') AS 'Client',
-            s.status AS 'Status'
-        FROM sarcini s
-        JOIN utilizatori u ON s.atribuit_lui = u.id
-        LEFT JOIN clienti c ON s.client_id = c.id
-        ORDER BY s.termen_limita ASC, s.id DESC
-    """)
-    tasks_df = cur.fetchall()
-    conn.close()
-    
-    if tasks_df:
-        st.dataframe(pd.DataFrame(tasks_df), use_container_width=True, hide_index=True)
-        with st.expander("Marchează Sarcină Finalizată"):
-            id_task_fin = st.selectbox("Selectează sarcina", [f"{t['ID']} - {t['Titlu Sarcină']}" for t in tasks_df])
-            if st.button("Marchează ca Finalizată"):
-                tid = int(id_task_fin.split(" - ")[0])
-                conn = get_connection()
-                cur = conn.cursor()
-                cur.execute("UPDATE sarcini SET status = 'Finalizat' WHERE id = %s", (tid,))
-                conn.commit()
-                conn.close()
-                st.success("Sarcina a fost marcată ca finalizată!")
-                st.rerun()
-    else:
-        st.info("Nu există sarcini active.")
-
-# === 5. CĂUTARE PORTAL & ISTORIC ===
-elif modul_ales == "🔍 Căutare Portal & Istoric":
-    st.markdown("""
-        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
-            <h2 style="margin: 0; font-size: 22px; color: white;">🔍 Căutare Rapidă Dosar & Inspectare Istoric</h2>
-        </div>
-    """, unsafe_allow_html=True)
-    
-    c1, c2 = st.columns([2, 1])
-    nr_q = c1.text_input("Număr dosar:", "112/2/2026")
-    sursa_q = c2.selectbox("Sursă:", ["ICCJ (scj.ro)", "Portal.just.ro", "CNSC"])
-    
-    if st.button("Caută Detalii"):
-        with st.spinner(f"Se interoghează {sursa_q}..."):
-            info = executa_interogare(nr_q, sursa_q)
-            if not info:
-                st.warning(f"Dosarul nu a fost găsit pe {sursa_q}.")
-            else:
-                st.markdown(f"**Număr:** `{info.get('numar_formatat', nr_q)}` | **Instanță:** {info['institutie']} | **Complet:** `{info['complet']}`")
-                st.info(f"**Soluție / Stadiu actual:** {info['ultima_solutie']}")
-                if info.get('parti'):
-                    st.write("**Părți în dosar:**")
-                    st.dataframe(pd.DataFrame(info['parti']), use_container_width=True, hide_index=True)
-                if info.get('sedinte'):
-                    st.write("**Istoric Ședințe / Înregistrări:**")
-                    st.dataframe(pd.DataFrame(info['sedinte']), use_container_width=True, hide_index=True)
+                    val_
