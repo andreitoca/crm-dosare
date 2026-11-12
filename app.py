@@ -842,7 +842,7 @@ elif modul_ales == "Clienți":
                     dt_c = c2.date_input("Data Încheierii", value=date.today())
                     client_caj = c3.selectbox("Client", list(c_dict.keys()))
 
-                    c4, c5, c6, c7, c8 = st.columns([1.2, 1, 1, 0.8, 1])
+                    c4, c5, c6, c7, c8 = st.columns([1.2, 1, 1, 1, 0.8])
                     tip_onor = c4.selectbox("Tip Onorariu", ["Abonament", "Orar", "Fix", "Succes"])
                     val_onor = c5.number_input("Tarif Orar / Valoare", min_value=0.0, step=10.0)
                     nr_ore_abon = c6.number_input("Număr ore (Abonament)", min_value=0.0, step=1.0, value=0.0)
@@ -856,71 +856,155 @@ elif modul_ales == "Clienți":
                         cur = conn.cursor()
                         try:
                             cur.execute("""
-                                INSERT INTO contracte (serie_numar, data_contract, client_id, obiect_contract, tip_onorariu, valoare_onorariu, tarif_depasire, moneda, numar_ore, status)
+                                INSERT INTO contracte (
+                                    serie_numar, data_contract, client_id, obiect_contract,
+                                    tip_onorariu, valoare_onorariu, tarif_depasire, moneda, numar_ore, status
+                                )
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'Activ')
-                            """, (serie_nr, dt_c, c_dict[client_caj], obiect_caj, tip_onor, val_onor, tarif_dep, moneda, nr_ore_abon))
+                            """, (
+                                serie_nr.strip(), dt_c, c_dict[client_caj], obiect_caj,
+                                tip_onor, val_onor, tarif_dep, moneda, nr_ore_abon
+                            ))
                             conn.commit()
-                            st.success(f"Contractul {serie_nr} a fost salvat!")
+                            st.success(f"Contractul {serie_nr.strip()} a fost salvat!")
                         except Exception as e:
-                            st.error(f"Eroare: {e}")
+                            st.error(f"Eroare la salvare: {e}")
                         conn.close()
                         st.rerun()
 
+        # --- TABEL COMPLET CONTRACTE + ȘTERGERE CU CONFIRMARE DA / NU ---
         an_crt = date.today().year
         luna_crt = date.today().month
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
             SELECT
-                k.id AS ID,
-                k.serie_numar AS 'Serie/Număr CAJ',
-                k.data_contract AS 'Data',
-                c.denumire AS 'Client',
-                k.tip_onorariu AS 'Tip Onorariu',
-                CONCAT(k.valoare_onorariu, ' ', k.moneda) AS 'Tarif / Valoare',
-                CASE
-                    WHEN k.tip_onorariu = 'Abonament' AND k.tarif_depasire > 0 THEN CONCAT(k.tarif_depasire, ' ', k.moneda, '/h')
-                    ELSE '-'
-                END AS 'Tarif Depășire',
-                CASE
-                    WHEN k.tip_onorariu = 'Abonament' AND k.numar_ore > 0 THEN
-                        CONCAT(
-                            COALESCE((SELECT SUM(p.ore_lucrate) FROM pontaj p WHERE p.client_id = k.client_id AND YEAR(p.data_activitate) = %s AND MONTH(p.data_activitate) = %s), 0),
-                            ' / ', k.numar_ore, ' ore (',
-                            ROUND((COALESCE((SELECT SUM(p.ore_lucrate) FROM pontaj p WHERE p.client_id = k.client_id AND YEAR(p.data_activitate) = %s AND MONTH(p.data_activitate) = %s), 0) / k.numar_ore) * 100, 0),
-                            '%%)'
-                        )
-                    ELSE '-'
-                END AS 'Consum Lunar Abonament',
-                k.obiect_contract AS 'Obiect',
-                k.status AS 'Status'
+                k.id,
+                k.serie_numar,
+                k.data_contract,
+                c.denumire AS client_nume,
+                k.tip_onorariu,
+                k.valoare_onorariu,
+                k.tarif_depasire,
+                k.numar_ore,
+                k.moneda,
+                k.obiect_contract,
+                k.status,
+                COALESCE((
+                    SELECT SUM(p.ore_lucrate)
+                    FROM pontaj p
+                    WHERE p.client_id = k.client_id
+                      AND YEAR(p.data_activitate) = %s
+                      AND MONTH(p.data_activitate) = %s
+                ), 0) AS ore_consumate_luna
             FROM contracte k
             JOIN clienti c ON k.client_id = c.id
             ORDER BY k.id DESC
-        """, (an_crt, luna_crt, an_crt, luna_crt))
-        caj_df = cur.fetchall()
+        """, (an_crt, luna_crt))
+        contracte_rows = cur.fetchall()
         conn.close()
 
-        if caj_df:
-            st.dataframe(pd.DataFrame(caj_df), use_container_width=True, hide_index=True)
-            with st.expander("🗑️ Șterge un contract de asistență (CAJ)"):
-                optiuni_del_caj = [f"{k['ID']} - {k['Serie/Număr CAJ']} ({k['Client']})" for k in caj_df]
-                contract_de_sters = st.selectbox("Selectează contractul pe care dorești să-l elimini:", optiuni_del_caj)
-                st.warning("Atenție: Ștergerea contractului va elimina definitiv înregistrarea CAJ selectată.")
-                if st.button("Confirmă Ștergerea Contractului", type="secondary"):
-                    k_id_del = int(contract_de_sters.split(" - ")[0])
-                    conn = get_connection()
-                    cur = conn.cursor()
-                    try:
-                        cur.execute("DELETE FROM contracte WHERE id = %s", (k_id_del,))
-                        conn.commit()
-                        st.success(f"Contractul '{contract_de_sters}' a fost șters cu succes!")
-                    except Exception as e:
-                        st.error(f"Eroare la ștergerea contractului: {e}")
-                    conn.close()
-                    st.rerun()
+        st.markdown("#### 📋 Registru Contracte de Asistență Juridică (CAJ)")
+
+        if contracte_rows:
+            date_tabel = []
+            for r in contracte_rows:
+                tip = r["tip_onorariu"] or "-"
+                mon = r["moneda"] or "EUR"
+                val_baza = float(r["valoare_onorariu"] or 0)
+                t_dep = float(r["tarif_depasire"] or 0)
+                ore_ab = float(r["numar_ore"] or 0)
+                ore_cons = float(r["ore_consumate_luna"] or 0)
+
+                if tip == "Abonament":
+                    onorariu_str = f"{val_baza:.2f} {mon}/h (Abonament)"
+                    ore_str = f"{ore_ab:.1f} ore / lună" if ore_ab > 0 else "Nelimitat"
+                    depasire_str = f"{t_dep:.2f} {mon}/h" if t_dep > 0 else f"{val_baza:.2f} {mon}/h"
+                    if ore_ab > 0:
+                        proc = (ore_cons / ore_ab) * 100
+                        consum_str = f"{ore_cons:.2f} / {ore_ab:.1f} ore ({proc:.0f}%)"
+                    else:
+                        consum_str = f"{ore_cons:.2f} ore"
+                elif tip == "Orar":
+                    onorariu_str = f"{val_baza:.2f} {mon}/h"
+                    ore_str = "-"
+                    depasire_str = "-"
+                    consum_str = f"{ore_cons:.2f} ore luna crt."
+                else:
+                    onorariu_str = f"{val_baza:.2f} {mon}"
+                    ore_str = "-"
+                    depasire_str = "-"
+                    consum_str = "-"
+
+                date_tabel.append({
+                    "ID": r["id"],
+                    "Serie / Număr CAJ": r["serie_numar"],
+                    "Data": r["data_contract"],
+                    "Client": r["client_nume"],
+                    "Tip Contract": tip,
+                    "Onorariu Convenit": onorariu_str,
+                    "Ore Incluse": ore_str,
+                    "Tarif Depășire": depasire_str,
+                    "Consum Luna Curentă": consum_str,
+                    "Obiect": r["obiect_contract"] or "-",
+                    "Status": r["status"] or "Activ"
+                })
+
+            st.dataframe(pd.DataFrame(date_tabel), use_container_width=True, hide_index=True)
+
+            # Panou de administrare și ștergere cu confirmare Da / Nu
+            if "confirmare_stergere_caj_id" not in st.session_state:
+                st.session_state.confirmare_stergere_caj_id = None
+
+            st.markdown("---")
+            col_sel_caj, col_btn_caj = st.columns([3, 1])
+            optiuni_caj = {
+                f"#{r['id']} | {r['serie_numar']} — {r['client_nume']} ({r['tip_onorariu']})": r["id"]
+                for r in contracte_rows
+            }
+            contract_ales_label = col_sel_caj.selectbox(
+                "Selectează un contract din listă pentru ștergere:",
+                list(optiuni_caj.keys()),
+                key="sel_caj_delete"
+            )
+            id_ales_pt_stergere = optiuni_caj[contract_ales_label]
+
+            with col_btn_caj:
+                st.write("")
+                st.write("")
+                if st.button("🗑️ Șterge contractul", use_container_width=True):
+                    st.session_state.confirmare_stergere_caj_id = id_ales_pt_stergere
+
+            # Casetă explicită de confirmare Da / Nu
+            if st.session_state.confirmare_stergere_caj_id is not None:
+                caj_tinta = next(
+                    (r for r in contracte_rows if r["id"] == st.session_state.confirmare_stergere_caj_id),
+                    None
+                )
+                if caj_tinta:
+                    st.warning(
+                        f"⚠️ **Ești sigur că dorești să ștergi definitiv contractul `{caj_tinta['serie_numar']}` "
+                        f"încheiat cu `{caj_tinta['client_nume']}`?** Această acțiune nu poate fi anulată."
+                    )
+                    col_da, col_nu, _ = st.columns([1, 1, 3])
+                    if col_da.button("✅ Da, șterge", type="primary", use_container_width=True):
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        try:
+                            cur.execute("DELETE FROM contracte WHERE id = %s", (caj_tinta["id"],))
+                            conn.commit()
+                            st.session_state.confirmare_stergere_caj_id = None
+                            st.success(f"Contractul {caj_tinta['serie_numar']} a fost șters.")
+                        except Exception as e:
+                            st.error(f"Eroare la ștergere: {e}")
+                        conn.close()
+                        st.rerun()
+
+                    if col_nu.button("❌ Nu, păstrează", use_container_width=True):
+                        st.session_state.confirmare_stergere_caj_id = None
+                        st.rerun()
         else:
-            st.info("Niciun contract înregistrat.")
+            st.info("Niciun contract înregistrat momentan. Folosește formularul de mai sus pentru a adăuga primul contract.")
 
 # === 3. PONTAJ & TIMESHEET ===
 elif modul_ales == "Pontaj":
