@@ -22,49 +22,44 @@ WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 import os
 import base64
 
-# --- STILIZARE MENIU LATERAL (ZONA LOGO ALBĂ + TOT RESTUL BARĂ ALBASTRU ROYAL + ICONURI DISTINCTE) ---
+# --- STILIZARE MENIU LATERAL (ZONA LOGO ALBĂ + BARĂ ALBASTRU ROYAL + CHENARE & ICONURI PROPRII) ---
 st.markdown("""
 <style>
-    /* Partea de sus (logo + utilizator) albă (primii ~175px), iar tot restul barei până jos Albastru Royal */
+    /* Partea de sus (logo + utilizator) albă (primii 185px), iar tot restul barei până jos Albastru Royal */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #FFFFFF 0px, #FFFFFF 175px, #1E3A8A 175px, #1E3A8A 100%) !important;
+        background: linear-gradient(180deg, #FFFFFF 0px, #FFFFFF 185px, #1E3A8A 185px, #1E3A8A 100%) !important;
         border-right: 1px solid #CBD5E1 !important;
-        min-width: 210px !important;
-        max-width: 230px !important;
+        min-width: 215px !important;
+        max-width: 235px !important;
     }
 
     section[data-testid="stSidebar"] > div:first-child {
-        padding: 16px 12px !important;
+        padding: 16px 14px !important;
         background: transparent !important;
     }
 
-    /* Ascunde eticheta "Navigare:" și cerculețul radio (inclusiv input-ul nativ) */
+    /* Ascunde eticheta și cerculețul radio */
     section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"],
-    section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child,
-    section[data-testid="stSidebar"] div[role="radiogroup"] [data-baseweb="radio"] > div:first-child,
-    section[data-testid="stSidebar"] div[role="radiogroup"] input {
+    section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
         display: none !important;
-        visibility: hidden !important;
-        width: 0 !important;
-        height: 0 !important;
-        margin: 0 !important;
-        padding: 0 !important;
     }
 
-    /* Containerul meniului pe zona albastră */
+    /* Containerul meniului */
     section[data-testid="stSidebar"] div[role="radiogroup"] {
         background-color: transparent !important;
-        margin-top: 18px !important;
-        gap: 8px !important;
+        margin-top: 22px !important;
+        display: flex !important;
+        flex-direction: column !important;
+        gap: 10px !important;
         width: 100% !important;
     }
 
-    /* Elementele de meniu */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label {
-        background-color: transparent !important;
-        border: none !important;
+    /* Chenarele fiecărui buton din meniu */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label {
+        background-color: rgba(255, 255, 255, 0.08) !important;
+        border: 1px solid rgba(255, 255, 255, 0.25) !important;
         border-radius: 10px !important;
-        padding: 14px 8px !important;
+        padding: 14px 10px !important;
         width: 100% !important;
         display: flex !important;
         flex-direction: column !important;
@@ -75,8 +70,8 @@ st.markdown("""
         transition: all 0.2s ease !important;
     }
 
-    /* Baza comună pentru pictogramele vectoriale minimaliste */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label::before {
+    /* Baza comună pentru imaginile PNG încărcate (transformate automat în alb pur) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label::before {
         content: "" !important;
         display: block !important;
         width: 28px !important;
@@ -85,66 +80,59 @@ st.markdown("""
         background-repeat: no-repeat !important;
         background-position: center !important;
         background-size: contain !important;
-        opacity: 0.85 !important;
+        filter: brightness(0) invert(1) !important;
+        opacity: 0.9 !important;
     }
 
-    /* 1. Icon DOSARE (Folder / Dosar juridic) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Dosare"])::before,
-    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(1)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z'/%3E%3Cpath d='M8 13h8'/%3E%3C/svg%3E") !important;
+    /* 1. Dosare -> File.png */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(1)::before {
+        background-image: var(--icon-dosare) !important;
     }
 
-    /* 2. Icon CLIENȚI (Persoană în chenar rotunjit) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Clienți"])::before,
-    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(2)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Ccircle cx='12' cy='10' r='3'/%3E%3Cpath d='M7 18c1.2-2.2 3.1-3.2 5-3.2s3.8 1 5 3.2'/%3E%3C/svg%3E") !important;
+    /* 2. Clienți -> Mood Dollar.png */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(2)::before {
+        background-image: var(--icon-clienti) !important;
     }
 
-    /* 3. Icon PONTAJ (Ceas / Cronometru minimalist) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Pontaj"])::before,
-    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(3)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='13' r='8'/%3E%3Cpath d='M12 9v4l2.5 2.5M9 2h6M12 2v3'/%3E%3C/svg%3E") !important;
+    /* 3. Pontaj -> Alarm.png */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(3)::before {
+        background-image: var(--icon-pontaj) !important;
     }
 
-    /* 4. Icon SARCINI (Calendar cu bifă) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Sarcini"])::before,
-    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(4)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='17' rx='4'/%3E%3Cpath d='M8 2v3M16 2v3M9 13l2 2 4-4'/%3E%3C/svg%3E") !important;
+    /* 4. Sarcini -> Clipboard.png */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(4)::before {
+        background-image: var(--icon-sarcini) !important;
     }
 
-    /* 5. Icon CĂUTARE (Lupă minimalistă) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Căutare"])::before,
-    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(5)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-3.5-3.5'/%3E%3C/svg%3E") !important;
+    /* 5. Căutare -> Zoom Check.png */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:nth-child(5)::before {
+        background-image: var(--icon-cautare) !important;
     }
 
-    /* Textul din meniu */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label p {
-        color: #E2E8F0 !important;
+    /* Textul din interiorul chenarului */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label p {
+        color: #FFFFFF !important;
         font-size: 13px !important;
-        font-weight: 500 !important;
+        font-weight: 600 !important;
         line-height: 1.2 !important;
         text-align: center !important;
         margin: 0 !important;
     }
 
-    /* Efect Hover */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-        background-color: rgba(255, 255, 255, 0.12) !important;
-    }
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover p,
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover::before {
-        color: #FFFFFF !important;
-        opacity: 1 !important;
+    /* Efect Hover pe chenar */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+        background-color: rgba(255, 255, 255, 0.18) !important;
+        border-color: rgba(255, 255, 255, 0.5) !important;
     }
 
-    /* Elementul Activ - Verde Smarald */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+    /* Chenarul Activ - Verde Smarald */
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
         background-color: #00B87C !important;
+        border-color: #00B87C !important;
+        box-shadow: 0 3px 10px rgba(0, 184, 124, 0.35) !important;
     }
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p,
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked)::before {
-        color: #FFFFFF !important;
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) p,
+    section[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked)::before {
         font-weight: 700 !important;
         opacity: 1 !important;
     }
@@ -160,6 +148,71 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# --- BARA LATERALĂ & NAVIGARE ---
+def img_to_css_url(filename):
+    if os.path.exists(filename):
+        with open(filename, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        return f'url("data:image/png;base64,{b64}")'
+    return "none"
+
+# Injectăm cele 5 fișiere PNG încărcate de tine pe GitHub
+st.markdown(f"""
+<style>
+    :root {{
+        --icon-dosare: {img_to_css_url("File.png")};
+        --icon-clienti: {img_to_css_url("Mood Dollar.png")};
+        --icon-pontaj: {img_to_css_url("Alarm.png")};
+        --icon-sarcini: {img_to_css_url("Clipboard.png")};
+        --icon-cautare: {img_to_css_url("Zoom Check.png")};
+    }}
+</style>
+""", unsafe_allow_html=True)
+
+logo_gasit = None
+for ext in ["", ".png", ".jpg", ".jpeg", ".webp"]:
+    nume_fisier = f"220420_[1000xpx]_LOGO_AT{ext}"
+    if os.path.exists(nume_fisier):
+        logo_gasit = nume_fisier
+        break
+
+if logo_gasit:
+    with open(logo_gasit, "rb") as img_f:
+        b64_logo = base64.b64encode(img_f.read()).decode()
+    ext_mime = "png" if not logo_gasit.lower().endswith(("jpg", "jpeg")) else "jpeg"
+    st.sidebar.markdown(f"""
+        <div style="
+            background-color: #FFFFFF;
+            padding: 8px 6px;
+            text-align: center;
+            margin-bottom: 12px;
+        ">
+            <img src="data:image/{ext_mime};base64,{b64_logo}" style="max-width: 100%; height: auto; display: block; margin: 0 auto;" />
+        </div>
+    """, unsafe_allow_html=True)
+
+conn = get_connection()
+cur = conn.cursor()
+cur.execute("SELECT id, nume, rol FROM utilizatori WHERE activ = 1 ORDER BY id ASC")
+useri_db = cur.fetchall()
+conn.close()
+
+user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Avocat Coordonator": 1}
+utilizator_selectat = st.sidebar.selectbox("Utilizator", list(user_dict.keys()), label_visibility="collapsed")
+id_utilizator_curent = user_dict[utilizator_selectat]
+
+modul_ales = st.sidebar.radio(
+    "Navigare:",
+    [
+        "Dosare",
+        "Clienți",
+        "Pontaj",
+        "Sarcini",
+        "Căutare"
+    ],
+    label_visibility="collapsed"
+)
 # --- 1. INTEROGARE PORTAL.JUST.RO ---
 def interogheaza_instanta(numar_dosar):
     try:
