@@ -306,33 +306,54 @@ def executa_interogare(numar, sursa):
         return interogheaza_iccj(numar)
     return None
 
-# --- BARA LATERALĂ & NAVIGARE ---
-try:
-    st.sidebar.image("220420_[1000xpx]_LOGO_AT.png", use_container_width=True)
-except Exception:
-    st.sidebar.markdown("### ⚖️ TOCA SCA CRM")
+# --- STILIZARE MENIU LATERAL (CASETE ALBASTRU ROYAL) ---
+st.markdown("""
+<style>
+    /* Ascunde cerculețul radio standard */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
+        display: none !important;
+    }
 
-conn = get_connection()
-cur = conn.cursor()
-cur.execute("SELECT id, nume, rol FROM utilizatori WHERE activ = 1 ORDER BY id ASC")
-useri_db = cur.fetchall()
-conn.close()
+    /* Spațiere între casete */
+    section[data-testid="stSidebar"] div[role="radiogroup"] {
+        gap: 10px !important;
+    }
 
-user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Avocat Coordonator": 1}
-utilizator_selectat = st.sidebar.selectbox("👤 Utilizator conectat:", list(user_dict.keys()))
-id_utilizator_curent = user_dict[utilizator_selectat]
+    /* Aspectul fiecărei casete (Albastru Royal) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label {
+        background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%) !important;
+        border: 1px solid #2563EB !important;
+        border-radius: 8px !important;
+        padding: 12px 15px !important;
+        width: 100% !important;
+        cursor: pointer !important;
+        transition: all 0.2s ease-in-out !important;
+        box-shadow: 0 2px 5px rgba(30, 58, 138, 0.2) !important;
+    }
 
-st.sidebar.markdown("---")
-modul_ales = st.sidebar.radio(
-    "Navigare:",
-    [
-        "📋 Portofoliu Dosare",
-        "👥 Clienți & Contracte (CAJ)",
-        "⏱️ Pontaj & Timesheet",
-        "📌 Sarcini de Lucru (Tasks)",
-        "🔍 Căutare Portal & Istoric"
-    ]
-)
+    /* Textul alb din interiorul casetelor */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label p {
+        color: #FFFFFF !important;
+        font-weight: 600 !important;
+        font-size: 14px !important;
+        margin: 0 !important;
+    }
+
+    /* Efect la trecerea mouse-ului peste casetă (Hover) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
+        background: linear-gradient(135deg, #172554 0%, #1D4ED8 100%) !important;
+        transform: translateX(4px) !important;
+        border-color: #D4AF37 !important;
+    }
+
+    /* Evidențierea casetei selectate (Active) cu bordură aurie */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
+        background: linear-gradient(135deg, #0F172A 0%, #1E3A8A 100%) !important;
+        border: 2px solid #D4AF37 !important;
+        box-shadow: 0 4px 10px rgba(212, 175, 55, 0.3) !important;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # === 1. PORTOFOLIU DOSARE ===
 if modul_ales == "📋 Portofoliu Dosare":
