@@ -534,8 +534,31 @@ elif modul_ales == "👥 Clienți & Contracte (CAJ)":
         clienti_df = cur.fetchall()
         conn.close()
         
-        if clienti_df:
+       if clienti_df:
             st.dataframe(pd.DataFrame(clienti_df), use_container_width=True, hide_index=True)
+            
+            with st.expander("🗑️ Șterge un client din baza de date"):
+                optiuni_del_client = [f"{c['ID']} - {c['Denumire']}" for c in clienti_df]
+                client_de_sters = st.selectbox("Selectează clientul pe care dorești să-l elimini:", optiuni_del_client)
+                st.warning("Atenție: Ștergerea clientului va elimina și contractele de asistență (CAJ) asociate acestuia, iar dosarele aferente vor rămâne în portofoliu fără client asociat.")
+                
+                if st.button("Confirmă Ștergerea Clientului", type="secondary"):
+                    c_id_del = int(client_de_sters.split(" - ")[0])
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    try:
+                        # Decuplăm dosarele și ștergem înregistrările dependente pentru a evita erorile de cheie străină
+                        cur.execute("UPDATE dosare SET client_id = NULL WHERE client_id = %s", (c_id_del,))
+                        cur.execute("DELETE FROM pontaj WHERE client_id = %s", (c_id_del,))
+                        cur.execute("DELETE FROM sarcini WHERE client_id = %s", (c_id_del,))
+                        cur.execute("DELETE FROM contracte WHERE client_id = %s", (c_id_del,))
+                        cur.execute("DELETE FROM clienti WHERE id = %s", (c_id_del,))
+                        conn.commit()
+                        st.success(f"Clientul '{client_de_sters}' a fost șters cu succes!")
+                    except Exception as e:
+                        st.error(f"Eroare la ștergerea clientului: {e}")
+                    conn.close()
+                    st.rerun()
         else:
             st.info("Niciun client înregistrat încă.")
 
