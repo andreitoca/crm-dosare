@@ -523,18 +523,9 @@ def trimite_alerta_abonament(client_nume, serie_caj, ore_incluse, ore_lucrate, p
     try:
         if smtp_port == 465:
             ctx = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(
-                smtp_server,
-                smtp_port,
-                context=ctx,
-                timeout=20
-            )
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=20)
         else:
-            server = smtplib.SMTP(
-                smtp_server,
-                smtp_port,
-                timeout=20
-            )
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=20)
             server.starttls()
         server.login(expeditor, parola)
         server.sendmail(expeditor, destinatari_lista, msg.as_string())
@@ -987,4 +978,269 @@ elif modul_ales == "Clienți":
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'Activ')
                             """, (
                                 serie_nr.strip(), dt_c, c_dict[client_caj], obiect_caj,
-                                tip_onor
+                                tip_onor, val_onor, tarif_dep, moneda, nr_ore_abon
+                            ))
+                            conn.commit()
+                            goleste_cache_date()
+                            st.success(f"Contractul {serie_nr.strip()} a fost salvat!")
+                        except Exception as e:
+                            st.error(f"Eroare la salvare: {e}")
+                        conn.close()
+                        st.rerun()
+
+        @st.dialog("⚠️ Confirmare ștergere contract")
+        def dialog_confirmare_stergere_caj(caj_id, serie_caj, client_caj):
+            st.write(f"Ești sigur că dorești să ștergi definitiv contractul **{serie_caj}** încheiat cu **{client_caj}**?")
+            st.caption("Această acțiune va elimina permanent înregistrarea din baza de date.")
+            col_da, col_nu = st.columns(2)
+            if col_da.button("✅ Da, șterge", type="primary", use_container_width=True):
+                conn = get_connection()
+                cur = conn.cursor()
+                try:
+                    cur.execute("DELETE FROM contracte WHERE id = %s", (caj_id,))
+                    conn.commit()
+                    goleste_cache_date()
+                except Exception as e:
+                    st.error(f"Eroare la ștergere: {e}")
+                conn.close()
+                st.rerun()
+            if col_nu.button("❌ Nu, păstrează", use_container_width=True):
+                st.rerun()
+
+        an_crt = date.today().year
+        luna_crt = date.today().month
+        contracte_rows = get_contracte_cached(an_crt, luna_crt)
+
+        st.markdown("#### 📋 Registru Contracte de Asistență Juridică (CAJ)")
+
+        if contracte_rows:
+            widths = [0.5, 1.3, 1.0, 1.5, 1.0, 1.3, 1.1, 1.3, 1.8, 0.8, 0.5]
+            headers = [
+                "ID", "Serie / Nr.", "Data", "Client", "Tip",
+                "Onorariu", "Ore Incl.", "Depășire", "Consum Lună", "Status", ""
+            ]
+            h_cols = st.columns(widths)
+            for col_h, text_h in zip(h_cols, headers):
+                col_h.markdown(
+                    f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{text_h}</div>",
+                    unsafe_allow_html=True
+                )
+
+            for r in contracte_rows:
+                tip = r["tip_onorariu"] or "-"
+                mon = r["moneda"] or "EUR"
+                val_baza = float(r["valoare_onorariu"] or 0)
+                t_dep = float(r["tarif_depasire"] or 0)
+                ore_ab = float(r["numar_ore"] or 0)
+                ore_cons = float(r["ore_consumate_luna"] or 0)
+
+                if tip == "Abonament":
+                    onorariu_str = f"{val_baza:.2f} {mon}/h"
+                    ore_str = f"{ore_ab:.1f} h" if ore_ab > 0 else "Nelimitat"
+                    depasire_str = f"{t_dep:.2f} {mon}/h" if t_dep > 0 else f"{val_baza:.2f} {mon}/h"
+                    if ore_ab > 0:
+                        proc = (ore_cons / ore_ab) * 100
+                        consum_str = f"{ore_cons:.1f}/{ore_ab:.1f}h ({proc:.0f}%)"
+                    else:
+                        consum_str = f"{ore_cons:.1f} h"
+                elif tip == "Orar":
+                    onorariu_str = f"{val_baza:.2f} {mon}/h"
+                    ore_str = "-"
+                    depasire_str = "-"
+                    consum_str = f"{ore_cons:.1f} h"
+                else:
+                    onorariu_str = f"{val_baza:.2f} {mon}"
+                    ore_str = "-"
+                    depasire_str = "-"
+                    consum_str = "-"
+
+                r_cols = st.columns(widths)
+                valori_rand = [
+                    str(r["id"]),
+                    r["serie_numar"],
+                    str(r["data_contract"]),
+                    r["client_nume"],
+                    tip,
+                    onorariu_str,
+                    ore_str,
+                    depasire_str,
+                    consum_str,
+                    r["status"] or "Activ"
+                ]
+                for col_r, val_r in zip(r_cols[:-1], valori_rand):
+                    col_r.markdown(
+                        f"<div style='font-size:13px; color:#0F172A; padding-top:6px;'>{val_r}</div>",
+                        unsafe_allow_html=True
+                    )
+
+                if r_cols[-1].button("🗑️", key=f"del_row_caj_{r['id']}", help=f"Șterge contractul {r['serie_numar']}"):
+                    dialog_confirmare_stergere_caj(r["id"], r["serie_numar"], r["client_nume"])
+
+                st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
+        else:
+            st.info("Niciun contract înregistrat momentan. Folosește formularul de mai sus pentru a adăuga primul contract.")
+
+# === 3. PONTAJ & TIMESHEET ===
+elif modul_ales == "Pontaj":
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">⏱️ Pontaj & Timesheet Ore Lucrate</h2>
+        </div>
+    """, unsafe_allow_html=True)
+
+    if "alerte_pontaj_recente" in st.session_state and st.session_state.alerte_pontaj_recente:
+        for tip_al, text_al in st.session_state.alerte_pontaj_recente:
+            if tip_al == "error":
+                st.error(text_al)
+            elif tip_al == "warning":
+                st.warning(text_al)
+            else:
+                st.info(text_al)
+        st.session_state.alerte_pontaj_recente = []
+
+    c_list = get_clienti_cached()
+    d_list = get_dosare_cached()
+
+    c_map = {c['denumire']: c['id'] for c in c_list}
+    d_map = {d['Număr Dosar']: d['ID'] for d in d_list}
+
+    with st.expander("➕ Adaugă Pontaj Nou", expanded=True):
+        if not c_map:
+            st.warning("Adaugă mai întâi cel puțin un client în sistem.")
+        else:
+            with st.form("form_add_timesheet", clear_on_submit=True):
+                c1, c2, c3 = st.columns([1, 1.5, 1.5])
+                dt_p = c1.date_input("Data Activității", value=date.today())
+                cl_p = c2.selectbox("Client *", list(c_map.keys()))
+                ds_p = c3.selectbox("Dosar asociat (opțional)", ["(Niciun dosar)"] + list(d_map.keys()))
+
+                c4, c5 = st.columns([1, 1])
+                ore = c4.number_input("Număr Ore (ex: 1.5 = 1h30m)", min_value=0.1, max_value=24.0, step=0.25, value=1.0)
+                tarif = c5.number_input("Tarif Orar (lasă 0 pentru calcul automat din CAJ/Abonament)", min_value=0.0, step=10.0, value=0.0)
+
+                act = st.text_area("Descrierea activității prestate *")
+
+                if st.form_submit_button("Înregistrează Orele") and act:
+                    dosar_id_val = d_map.get(ds_p, None) if ds_p != "(Niciun dosar)" else None
+                    cl_id_val = c_map[cl_p]
+
+                    tarif_aplicat, val_totala_calc, moneda_calc, nota_tarif = calculeaza_tarif_si_valoare_pontaj(
+                        cl_id_val, dt_p, ore, tarif
+                    )
+
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO pontaj (data_activitate, utilizator_id, client_id, dosar_id, descriere_activitate, ore_lucrate, onorariu_orar, valoare_totala, moneda)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (dt_p, id_utilizator_curent, cl_id_val, dosar_id_val, act, ore, tarif_aplicat, val_totala_calc, moneda_calc))
+                    conn.commit()
+                    conn.close()
+
+                    mesaje_rez = []
+                    if nota_tarif:
+                        mesaje_rez.append(("info", f"💶 {nota_tarif}"))
+
+                    alerte_noi = verifica_abonament_dupa_pontaj(cl_id_val, dt_p)
+                    if alerte_noi:
+                        mesaje_rez.extend(alerte_noi)
+
+                    if mesaje_rez:
+                        st.session_state.alerte_pontaj_recente = mesaje_rez
+
+                    goleste_cache_date()
+                    st.success("Activitatea a fost pontată cu succes!")
+                    st.rerun()
+
+    st.subheader(f"Istoric Pontaj ({utilizator_selectat})")
+    pontaj_df = get_pontaj_cached()
+
+    if pontaj_df:
+        st.dataframe(pd.DataFrame(pontaj_df), use_container_width=True, hide_index=True)
+    else:
+        st.info("Nu există înregistrări de pontaj.")
+
+# === 4. SARCINI DE LUCRU (TASKS) ===
+elif modul_ales == "Sarcini":
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">📌 Sarcini de Lucru & Termene Echipă</h2>
+        </div>
+    """, unsafe_allow_html=True)
+
+    cl_t = get_clienti_cached()
+    cl_t_map = {c['denumire']: c['id'] for c in cl_t}
+
+    with st.expander("➕ Creează o Sarcină Nouă", expanded=False):
+        with st.form("form_task", clear_on_submit=True):
+            col1, col2 = st.columns([2, 1])
+            titlu = col1.text_input("Titlu Sarcină *")
+            prioritate = col2.selectbox("Prioritate", ["Normală", "Ridicată", "Urgentă"])
+
+            col3, col4, col5 = st.columns([1.5, 1, 1.5])
+            termen = col3.date_input("Termen Limită", value=date.today())
+            ora = col4.text_input("Ora Limită", value="16:00")
+            atribuit = col5.selectbox("Atribuit către", list(user_dict.keys()))
+
+            client_asoc = st.selectbox("Client asociat (opțional)", ["(Niciunul)"] + list(cl_t_map.keys()))
+            detalii = st.text_area("Instrucțiuni / Detalii sarcină")
+
+            if st.form_submit_button("Salvează Sarcina") and titlu:
+                c_id_t = cl_t_map.get(client_asoc, None) if client_asoc != "(Niciunul)" else None
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO sarcini (titlu, descriere, termen_limita, ora_limita, atribuit_lui, creat_de, client_id, prioritate, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'În lucru')
+                """, (titlu, detalii, termen, ora, user_dict[atribuit], id_utilizator_curent, c_id_t, prioritate))
+                conn.commit()
+                conn.close()
+                goleste_cache_date()
+                st.success("Sarcina a fost adăugată!")
+                st.rerun()
+
+    tasks_df = get_sarcini_cached()
+
+    if tasks_df:
+        st.dataframe(pd.DataFrame(tasks_df), use_container_width=True, hide_index=True)
+        with st.expander("Marchează Sarcină Finalizată"):
+            id_task_fin = st.selectbox("Selectează sarcina", [f"{t['ID']} - {t['Titlu Sarcină']}" for t in tasks_df])
+            if st.button("Marchează ca Finalizată"):
+                tid = int(id_task_fin.split(" - ")[0])
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("UPDATE sarcini SET status = 'Finalizat' WHERE id = %s", (tid,))
+                conn.commit()
+                conn.close()
+                goleste_cache_date()
+                st.success("Sarcina a fost marcată ca finalizată!")
+                st.rerun()
+    else:
+        st.info("Nu există sarcini active.")
+
+# === 5. CĂUTARE PORTAL & ISTORIC ===
+elif modul_ales == "Căutare":
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">🔍 Căutare Rapidă Dosar & Inspectare Istoric</h2>
+        </div>
+    """, unsafe_allow_html=True)
+
+    c1, c2 = st.columns([2, 1])
+    nr_q = c1.text_input("Număr dosar:", "112/2/2026")
+    sursa_q = c2.selectbox("Sursă:", ["ICCJ (scj.ro)", "Portal.just.ro", "CNSC"])
+
+    if st.button("Caută Detalii"):
+        with st.spinner(f"Se interoghează {sursa_q}..."):
+            info = executa_interogare(nr_q, sursa_q)
+            if not info:
+                st.warning(f"Dosarul nu a fost găsit pe {sursa_q}.")
+            else:
+                st.markdown(f"**Număr:** `{info.get('numar_formatat', nr_q)}` | **Instanță:** {info['institutie']} | **Complet:** `{info['complet']}`")
+                st.info(f"**Soluție / Stadiu actual:** {info['ultima_solutie']}")
+                if info.get('parti'):
+                    st.write("**Părți în dosar:**")
+                    st.dataframe(pd.DataFrame(info['parti']), use_container_width=True, hide_index=True)
+                if info.get('sedinte'):
+                    st.write("**Istoric Ședințe / Înregistrări:**")
+                    st.dataframe(pd.DataFrame(info['sedinte']), use_container_width=True, hide_index=True)
