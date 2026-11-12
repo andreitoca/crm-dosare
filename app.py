@@ -22,10 +22,10 @@ WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 import os
 import base64
 
-# --- STILIZARE MENIU LATERAL (FUNDAL ALB CURAT) ---
+# --- STILIZARE MENIU LATERAL (ZONA SUS ALBĂ + MENIU ALBASTRU ROYAL CU ICONURI OUTLINE) ---
 st.markdown("""
 <style>
-    /* Fundalul complet alb al barei laterale */
+    /* Bara laterală rămâne albă pentru logo și utilizator */
     section[data-testid="stSidebar"] {
         background-color: #FFFFFF !important;
         border-right: 1px solid #E2E8F0 !important;
@@ -41,20 +41,26 @@ st.markdown("""
     /* Ascunde eticheta "Navigare:" și cerculețul radio */
     section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"],
     section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child,
-    section[data-testid="stSidebar"] div[role="radiogroup"] input[type="radio"] {
+    section[data-testid="stSidebar"] div[role="radiogroup"] [data-baseweb="radio"] > div:first-child {
         display: none !important;
+        width: 0 !important;
+        height: 0 !important;
     }
 
-    /* Spațiere între opțiunile meniului */
+    /* Doar zona meniului de navigare primește fundal Albastru Royal */
     section[data-testid="stSidebar"] div[role="radiogroup"] {
+        background-color: #1E3A8A !important;
+        padding: 10px 8px !important;
+        border-radius: 12px !important;
         gap: 6px !important;
         width: 100% !important;
+        box-shadow: 0 4px 12px rgba(30, 58, 138, 0.15) !important;
     }
 
-    /* Aspectul fiecărui element de meniu (inactiv - pe fundal alb) */
+    /* Elementele de meniu pe fundalul Albastru Royal */
     section[data-testid="stSidebar"] div[role="radiogroup"] label {
-        background-color: #F8FAFC !important;
-        border: 1px solid #E2E8F0 !important;
+        background-color: transparent !important;
+        border: none !important;
         border-radius: 8px !important;
         padding: 12px 8px !important;
         width: 100% !important;
@@ -67,39 +73,76 @@ st.markdown("""
         transition: all 0.2s ease !important;
     }
 
-    /* Textul și pictograma (închise la culoare pentru contrast pe alb) */
+    /* Icon-ul vectorial minimalist (outline alb) generat înaintea textului */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label::before {
+        content: "" !important;
+        display: block !important;
+        width: 28px !important;
+        height: 28px !important;
+        margin-bottom: 6px !important;
+        background-repeat: no-repeat !important;
+        background-position: center !important;
+        background-size: contain !important;
+        opacity: 0.78 !important;
+    }
+
+    /* 1. Icon Dosare (Portofoliu) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(1)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Cpath d='M8 7v10M12 7v7M16 7v4'/%3E%3C/svg%3E") !important;
+    }
+
+    /* 2. Icon Clienți (exact ca în model) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(2)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Ccircle cx='12' cy='10' r='3'/%3E%3Cpath d='M7 18c1.2-2.2 3.1-3.2 5-3.2s3.8 1 5 3.2'/%3E%3C/svg%3E") !important;
+    }
+
+    /* 3. Icon Pontaj (Activități / Calendar cu bifă ca în model) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(3)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='17' rx='4'/%3E%3Cpath d='M8 2v3M16 2v3M9 13l2 2 4-4'/%3E%3C/svg%3E") !important;
+    }
+
+    /* 4. Icon Sarcini (Pachet / Dosar lucru ca în model) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(4)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Cpath d='M9 3v5l3-1.5L15 8V3M9 15h6'/%3E%3C/svg%3E") !important;
+    }
+
+    /* 5. Icon Căutare / Statistici (exact ca în model) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(5)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Cpath d='M8 16v-2M12 16v-4M16 16v-6M7 11c3 0 6-2 9-5'/%3E%3C/svg%3E") !important;
+    }
+
+    /* Textul din meniu */
     section[data-testid="stSidebar"] div[role="radiogroup"] label p {
-        color: #1E3A8A !important;
+        color: #CBD5E1 !important;
         font-size: 13px !important;
-        font-weight: 600 !important;
-        line-height: 1.4 !important;
-        white-space: pre-line !important;
+        font-weight: 500 !important;
+        line-height: 1.2 !important;
         text-align: center !important;
         margin: 0 !important;
     }
 
-    /* Mărirea pictogramei de deasupra textului */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label p::first-line {
-        font-size: 24px !important;
-    }
-
-    /* Efect la trecerea mouse-ului (Hover) */
+    /* Efect Hover */
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-        background-color: #EFF6FF !important;
-        border-color: #93C5FD !important;
+        background-color: rgba(255, 255, 255, 0.1) !important;
+    }
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover p,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover::before {
+        color: #FFFFFF !important;
+        opacity: 1 !important;
     }
 
-    /* Elementul selectat (Activ) - Verde smarald ca în model */
+    /* Elementul Activ - Verde Smarald */
     section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
         background-color: #00B87C !important;
-        border-color: #00B87C !important;
     }
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked)::before {
         color: #FFFFFF !important;
         font-weight: 700 !important;
+        opacity: 1 !important;
     }
 
-    /* Selectorul de utilizator */
+    /* Selectorul de utilizator pe zona albă */
     section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
         background-color: #F8FAFC !important;
         border: 1px solid #CBD5E1 !important;
@@ -108,14 +151,8 @@ st.markdown("""
         font-size: 13px !important;
         font-weight: 600 !important;
     }
-
-    section[data-testid="stSidebar"] hr {
-        border-color: #E2E8F0 !important;
-        margin: 12px 0 !important;
-    }
 </style>
 """, unsafe_allow_html=True)
-
 # --- 1. INTEROGARE PORTAL.JUST.RO ---
 def interogheaza_instanta(numar_dosar):
     try:
