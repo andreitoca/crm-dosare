@@ -1,5 +1,10 @@
 import os
+import re
+import ssl
+import smtplib
 import base64
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date
@@ -95,12 +100,12 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
 # --- AUTO-VERIFICARE ȘI REPARARE TABELE BAZĂ DE DATE ---
 def asigura_structura_db():
     conn = get_connection()
     cur = conn.cursor()
-    
-    # 1. Tabelul clienti
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS clienti (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -113,23 +118,19 @@ def asigura_structura_db():
             email VARCHAR(150) DEFAULT ''
         )
     """)
-    
-    # Adăugăm coloanele dacă tabelul clienti exista deja într-o formă mai veche
-    coloane_clienti = [
+    for nume_col, tip_col in [
         ("tip_client", "VARCHAR(50) DEFAULT 'PJ (Companie)'"),
         ("cui_cnp", "VARCHAR(100) DEFAULT ''"),
         ("adresa", "TEXT"),
         ("reprezentant", "VARCHAR(255) DEFAULT ''"),
         ("telefon", "VARCHAR(100) DEFAULT ''"),
         ("email", "VARCHAR(150) DEFAULT ''")
-    ]
-    for nume_col, tip_col in coloane_clienti:
+    ]:
         try:
             cur.execute(f"ALTER TABLE clienti ADD COLUMN {nume_col} {tip_col}")
         except Exception:
             pass
 
-    # 2. Tabelul contracte (CAJ)
     cur.execute("""
         CREATE TABLE IF NOT EXISTS contracte (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -139,12 +140,25 @@ def asigura_structura_db():
             obiect_contract TEXT,
             tip_onorariu VARCHAR(50),
             valoare_onorariu DECIMAL(12,2) DEFAULT 0,
+            tarif_depasire DECIMAL(12,2) DEFAULT 0,
             moneda VARCHAR(20) DEFAULT 'RON',
+            numar_ore DECIMAL(8,2) DEFAULT 0,
+            alerta_80_luna VARCHAR(20) DEFAULT '',
+            alerta_100_luna VARCHAR(20) DEFAULT '',
             status VARCHAR(50) DEFAULT 'Activ'
         )
     """)
+    for nume_col, tip_col in [
+        ("tarif_depasire", "DECIMAL(12,2) DEFAULT 0"),
+        ("numar_ore", "DECIMAL(8,2) DEFAULT 0"),
+        ("alerta_80_luna", "VARCHAR(20) DEFAULT ''"),
+        ("alerta_100_luna", "VARCHAR(20) DEFAULT ''")
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE contracte ADD COLUMN {nume_col} {tip_col}")
+        except Exception:
+            pass
 
-    # 3. Tabelul pontaj
     cur.execute("""
         CREATE TABLE IF NOT EXISTS pontaj (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -154,11 +168,20 @@ def asigura_structura_db():
             dosar_id INT NULL,
             descriere_activitate TEXT,
             ore_lucrate DECIMAL(6,2) DEFAULT 1.0,
-            onorariu_orar DECIMAL(10,2) DEFAULT 0.0
+            onorariu_orar DECIMAL(10,2) DEFAULT 0.0,
+            valoare_totala DECIMAL(12,2) DEFAULT 0.0,
+            moneda VARCHAR(20) DEFAULT 'RON'
         )
     """)
+    for nume_col, tip_col in [
+        ("valoare_totala", "DECIMAL(12,2) DEFAULT 0.0"),
+        ("moneda", "VARCHAR(20) DEFAULT 'RON'")
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE pontaj ADD COLUMN {nume_col} {tip_col}")
+        except Exception:
+            pass
 
-    # 4. Tabelul sarcini
     cur.execute("""
         CREATE TABLE IF NOT EXISTS sarcini (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -187,6 +210,226 @@ try:
     asigura_structura_db()
 except Exception:
     pass
+
+# --- CALCUL TARIF AUTOMAT PE ABONAMENT + DEPĂȘIRE ---
+def calculeaza_tarif_si_valoare_pontaj(client_id, data_activitate, ore_noi, tarif_manual):
+    """
+    Calculează automat valoarea activității în funcție de contractul activ al clientului:
+    - Pentru Abonament: orele până la plafonul lunar folosesc 'valoare_onorariu',
+      iar orele care depășesc plafonul folosesc 'tarif_depasire' (dacă este setat > 0).
+    - Dacă utilizatorul a introdus manual un tarif (> 0), se respectă tariful introdus manual.
+    """
+    an_int = data_activitate.year
+    luna_int = data_activitate.month
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT id, tip_onorariu, valoare_onorariu, tarif_depasire, numar_ore, moneda
+        FROM contracte
+        WHERE client_id = %s AND status = 'Activ'
+        ORDER BY id DESC LIMIT 1
+    """, (client_id,))
+    contract = cur.fetchone()
+
+    cur.execute("""
+        SELECT COALESCE(SUM(ore_lucrate), 0) AS ore_anterioare
+        FROM pontaj
+        WHERE client_id = %s AND YEAR(data_activitate) = %s AND MONTH(data_activitate) = %s
+    """, (client_id, an_int, luna_int))
+    res_ore = cur.fetchone()
+    conn.close()
+
+    ore_anterioare = float(res_ore["ore_anterioare"]) if res_ore else 0.0
+    moneda_crt = contract["moneda"] if contract and contract.get("moneda") else "RON"
+
+    # Dacă s-a introdus manual un tarif diferit de 0, îl folosim direct
+    if tarif_manual > 0:
+        return round(tarif_manual, 2), round(ore_noi * tarif_manual, 2), moneda_crt, None
+
+    if not contract:
+        return 0.0, 0.0, moneda_crt, None
+
+    tip = contract.get("tip_onorariu") or ""
+    tarif_baza = float(contract.get("valoare_onorariu") or 0.0)
+    tarif_dep = float(contract.get("tarif_depasire") or 0.0)
+    plafon_ore = float(contract.get("numar_ore") or 0.0)
+
+    if tip == "Abonament" and plafon_ore > 0:
+        if tarif_dep <= 0:
+            tarif_dep = tarif_baza
+
+        ore_ramase_in_plafon = max(0.0, plafon_ore - ore_anterioare)
+
+        if ore_noi <= ore_ramase_in_plafon:
+            # Toate orele intră în abonamentul lunar
+            val_tot = ore_noi * tarif_baza
+            nota = f"Tarif abonament aplicat: {tarif_baza:.2f} {moneda_crt}/oră."
+            return round(tarif_baza, 2), round(val_tot, 2), moneda_crt, nota
+        elif ore_ramase_in_plafon > 0:
+            # O parte intră în abonament, restul trec la tariful standard de depășire
+            ore_in = ore_ramase_in_plafon
+            ore_peste = ore_noi - ore_ramase_in_plafon
+            val_tot = (ore_in * tarif_baza) + (ore_peste * tarif_dep)
+            tarif_mediu = val_tot / ore_noi
+            nota = (
+                f"Plafon abonament atins: {ore_in:.2f} ore calculate la {tarif_baza:.2f} {moneda_crt}/h "
+                f"și {ore_peste:.2f} ore peste plafon calculate la {tarif_dep:.2f} {moneda_crt}/h."
+            )
+            return round(tarif_mediu, 2), round(val_tot, 2), moneda_crt, nota
+        else:
+            # Plafonul a fost deja depășit anterior în această lună
+            val_tot = ore_noi * tarif_dep
+            nota = f"Plafon lunar depășit: s-a aplicat tariful standard de depășire ({tarif_dep:.2f} {moneda_crt}/oră)."
+            return round(tarif_dep, 2), round(val_tot, 2), moneda_crt, nota
+
+    elif tip == "Orar" and tarif_baza > 0:
+        val_tot = ore_noi * tarif_baza
+        nota = f"Tarif orar contractual aplicat: {tarif_baza:.2f} {moneda_crt}/oră."
+        return round(tarif_baza, 2), round(val_tot, 2), moneda_crt, nota
+
+    return 0.0, 0.0, moneda_crt, None
+
+# --- FUNCȚIE TRIMITERE ALERTE ABONAMENT ---
+def trimite_alerta_abonament(client_nume, serie_caj, ore_incluse, ore_lucrate, procent, prag_label, luna_curenta, tarif_depasire=0.0, moneda="EUR"):
+    conn = get_connection()
+    cur = conn.cursor()
+    destinatari_lista = []
+
+    try:
+        cur.execute("SELECT email FROM utilizatori WHERE activ = 1 AND email IS NOT NULL AND email != ''")
+        u_rows = cur.fetchall()
+        for r in u_rows:
+            if r.get("email"):
+                destinatari_lista.append(r["email"].strip())
+    except Exception:
+        pass
+
+    smtp_server = "toca-law.ro"
+    smtp_port = 465
+    expeditor = ""
+    parola = ""
+
+    try:
+        cur.execute("SELECT smtp_server, smtp_port, email_expeditor, parola_email, email_destinatar FROM setari_email WHERE id = 1")
+        row_mail = cur.fetchone()
+        if row_mail:
+            smtp_server = row_mail.get("smtp_server") or "toca-law.ro"
+            smtp_port = int(row_mail.get("smtp_port") or 465)
+            expeditor = row_mail.get("email_expeditor") or ""
+            parola = row_mail.get("parola_email") or ""
+            if not destinatari_lista and row_mail.get("email_destinatar"):
+                destinatari_lista = [e.strip() for e in re.split(r"[,;]+", row_mail["email_destinatar"]) if e.strip()]
+    except Exception:
+        pass
+
+    conn.close()
+
+    if not expeditor or not parola or not destinatari_lista:
+        return False, "Credențialele SMTP sau adresele echipei nu sunt configurate."
+
+    destinatari_lista = list(dict.fromkeys(destinatari_lista))
+    culoare_banner = "#D97706" if prag_label == "80%" else "#DC2626"
+    subiect = f"[Alertă Abonament {prag_label}] {client_nume} - {ore_lucrate:.2f} / {ore_incluse:.2f} ore ({luna_curenta})"
+
+    info_tarif_nou = ""
+    if prag_label == "100%" and tarif_depasire > 0:
+        info_tarif_nou = f"<p style='color: #DC2626; font-weight: bold;'>Notă facturare: Pentru restul lunii {luna_curenta}, orele suplimentare se tarifează la {tarif_depasire:.2f} {moneda}/oră.</p>"
+
+    html = f"""<!DOCTYPE html>
+    <html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>
+    <body style="font-family: Arial, sans-serif; color: #1E293B; padding: 15px;">
+        <div style="background-color: {culoare_banner}; color: white; padding: 14px 18px; border-radius: 8px;">
+            <h3 style="margin: 0; color: white;">Alertă Consum Abonament ({prag_label}) &bull; Luna {luna_curenta}</h3>
+        </div>
+        <div style="padding: 16px; border: 1px solid #E2E8F0; border-radius: 8px; margin-top: 10px; background-color: #F8FAFC;">
+            <p><strong>Client:</strong> {client_nume}</p>
+            <p><strong>Contract CAJ:</strong> {serie_caj}</p>
+            <p><strong>Ore incluse în abonament lunar:</strong> {ore_incluse:.2f} ore</p>
+            <p><strong>Total ore lucrate în {luna_curenta}:</strong> <span style="font-size: 16px; font-weight: bold; color: {culoare_banner};">{ore_lucrate:.2f} ore ({procent:.0f}%)</span></p>
+            {info_tarif_nou}
+            <hr style="border: none; border-top: 1px solid #CBD5E1; margin: 14px 0;">
+            <p style="font-size: 12px; color: #64748B;">Notificare generată automat de sistemul CRM Toca Law la înregistrarea pontajului.</p>
+        </div>
+    </body></html>"""
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subiect
+    msg["From"] = f"CRM Toca Law <{expeditor}>"
+    msg["To"] = ", ".join(destinatari_lista)
+    msg.attach(MIMEText(html, "html", "utf-8"))
+
+    try:
+        if smtp_port == 465:
+            ctx = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=20)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=20)
+            server.starttls()
+        server.login(expeditor, parola)
+        server.sendmail(expeditor, destinatari_lista, msg.as_string())
+        server.quit()
+        return True, f"Alertă {prag_label} trimisă echipei ({', '.join(destinatari_lista)})!"
+    except Exception as e:
+        return False, f"Eroare trimitere email alertă: {e}"
+
+def verifica_abonament_dupa_pontaj(client_id, data_activitate):
+    luna_str = data_activitate.strftime("%Y-%m")
+    an_int = data_activitate.year
+    luna_int = data_activitate.month
+
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT k.id, k.serie_numar, k.numar_ore, k.tarif_depasire, k.moneda, k.alerta_80_luna, k.alerta_100_luna, c.denumire
+        FROM contracte k
+        JOIN clienti c ON k.client_id = c.id
+        WHERE k.client_id = %s AND k.tip_onorariu = 'Abonament' AND k.status = 'Activ' AND k.numar_ore > 0
+        ORDER BY k.id DESC LIMIT 1
+    """, (client_id,))
+    abonament = cur.fetchone()
+
+    if not abonament:
+        conn.close()
+        return []
+
+    cur.execute("""
+        SELECT COALESCE(SUM(ore_lucrate), 0) AS total_ore
+        FROM pontaj
+        WHERE client_id = %s AND YEAR(data_activitate) = %s AND MONTH(data_activitate) = %s
+    """, (client_id, an_int, luna_int))
+    res_ore = cur.fetchone()
+    total_ore = float(res_ore["total_ore"]) if res_ore else 0.0
+    ore_incluse = float(abonament["numar_ore"])
+    tarif_dep = float(abonament.get("tarif_depasire") or 0.0)
+    moneda_ab = abonament.get("moneda") or "EUR"
+    procent = (total_ore / ore_incluse) * 100.0 if ore_incluse > 0 else 0.0
+
+    mesaje_ui = []
+
+    if procent >= 100.0 and abonament.get("alerta_100_luna") != luna_str:
+        ok, msg = trimite_alerta_abonament(
+            abonament["denumire"], abonament["serie_numar"],
+            ore_incluse, total_ore, procent, "100%", luna_str, tarif_dep, moneda_ab
+        )
+        cur.execute("UPDATE contracte SET alerta_100_luna = %s, alerta_80_luna = %s WHERE id = %s", (luna_str, luna_str, abonament["id"]))
+        conn.commit()
+        mesaje_ui.append(("error", f"🚨 Plafon 100% atins/depășit pentru {abonament['denumire']} ({total_ore:.2f} / {ore_incluse:.2f} ore în {luna_str})! {msg}"))
+
+    elif procent >= 80.0 and abonament.get("alerta_80_luna") != luna_str:
+        ok, msg = trimite_alerta_abonament(
+            abonament["denumire"], abonament["serie_numar"],
+            ore_incluse, total_ore, procent, "80%", luna_str, tarif_dep, moneda_ab
+        )
+        cur.execute("UPDATE contracte SET alerta_80_luna = %s WHERE id = %s", (luna_str, abonament["id"]))
+        conn.commit()
+        mesaje_ui.append(("warning", f"⚠️ Prag 80% atins pentru {abonament['denumire']} ({total_ore:.2f} / {ore_incluse:.2f} ore în {luna_str})! {msg}"))
+
+    conn.close()
+    return mesaje_ui
+
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
 def interogheaza_portal_just(numar_dosar):
@@ -599,10 +842,12 @@ elif modul_ales == "Clienți":
                     dt_c = c2.date_input("Data Încheierii", value=date.today())
                     client_caj = c3.selectbox("Client", list(c_dict.keys()))
 
-                    c4, c5, c6 = st.columns(3)
-                    tip_onor = c4.selectbox("Tip Onorariu", ["Orar", "Fix", "Succes"])
-                    val_onor = c5.number_input("Valoare Onorariu", min_value=0.0, step=50.0)
-                    moneda = c6.selectbox("Monedă", ["RON", "EUR"])
+                    c4, c5, c6, c7, c8 = st.columns([1.2, 1, 1, 0.8, 1])
+                    tip_onor = c4.selectbox("Tip Onorariu", ["Abonament", "Orar", "Fix", "Succes"])
+                    val_onor = c5.number_input("Tarif Orar / Valoare", min_value=0.0, step=10.0)
+                    nr_ore_abon = c6.number_input("Număr ore (Abonament)", min_value=0.0, step=1.0, value=0.0)
+                    tarif_dep = c7.number_input("Tarif depășire / h", min_value=0.0, step=10.0, value=0.0)
+                    moneda = c8.selectbox("Monedă", ["EUR", "RON"])
 
                     obiect_caj = st.text_area("Obiectul asistenței juridice")
 
@@ -611,9 +856,9 @@ elif modul_ales == "Clienți":
                         cur = conn.cursor()
                         try:
                             cur.execute("""
-                                INSERT INTO contracte (serie_numar, data_contract, client_id, obiect_contract, tip_onorariu, valoare_onorariu, moneda, status)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, 'Activ')
-                            """, (serie_nr, dt_c, c_dict[client_caj], obiect_caj, tip_onor, val_onor, moneda))
+                                INSERT INTO contracte (serie_numar, data_contract, client_id, obiect_contract, tip_onorariu, valoare_onorariu, tarif_depasire, moneda, numar_ore, status)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'Activ')
+                            """, (serie_nr, dt_c, c_dict[client_caj], obiect_caj, tip_onor, val_onor, tarif_dep, moneda, nr_ore_abon))
                             conn.commit()
                             st.success(f"Contractul {serie_nr} a fost salvat!")
                         except Exception as e:
@@ -621,6 +866,8 @@ elif modul_ales == "Clienți":
                         conn.close()
                         st.rerun()
 
+        an_crt = date.today().year
+        luna_crt = date.today().month
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -630,13 +877,27 @@ elif modul_ales == "Clienți":
                 k.data_contract AS 'Data',
                 c.denumire AS 'Client',
                 k.tip_onorariu AS 'Tip Onorariu',
-                CONCAT(k.valoare_onorariu, ' ', k.moneda) AS 'Valoare',
+                CONCAT(k.valoare_onorariu, ' ', k.moneda) AS 'Tarif / Valoare',
+                CASE
+                    WHEN k.tip_onorariu = 'Abonament' AND k.tarif_depasire > 0 THEN CONCAT(k.tarif_depasire, ' ', k.moneda, '/h')
+                    ELSE '-'
+                END AS 'Tarif Depășire',
+                CASE
+                    WHEN k.tip_onorariu = 'Abonament' AND k.numar_ore > 0 THEN
+                        CONCAT(
+                            COALESCE((SELECT SUM(p.ore_lucrate) FROM pontaj p WHERE p.client_id = k.client_id AND YEAR(p.data_activitate) = %s AND MONTH(p.data_activitate) = %s), 0),
+                            ' / ', k.numar_ore, ' ore (',
+                            ROUND((COALESCE((SELECT SUM(p.ore_lucrate) FROM pontaj p WHERE p.client_id = k.client_id AND YEAR(p.data_activitate) = %s AND MONTH(p.data_activitate) = %s), 0) / k.numar_ore) * 100, 0),
+                            '%%)'
+                        )
+                    ELSE '-'
+                END AS 'Consum Lunar Abonament',
                 k.obiect_contract AS 'Obiect',
                 k.status AS 'Status'
             FROM contracte k
             JOIN clienti c ON k.client_id = c.id
             ORDER BY k.id DESC
-        """)
+        """, (an_crt, luna_crt, an_crt, luna_crt))
         caj_df = cur.fetchall()
         conn.close()
 
@@ -669,6 +930,16 @@ elif modul_ales == "Pontaj":
         </div>
     """, unsafe_allow_html=True)
 
+    if "alerte_pontaj_recente" in st.session_state and st.session_state.alerte_pontaj_recente:
+        for tip_al, text_al in st.session_state.alerte_pontaj_recente:
+            if tip_al == "error":
+                st.error(text_al)
+            elif tip_al == "warning":
+                st.warning(text_al)
+            else:
+                st.info(text_al)
+        st.session_state.alerte_pontaj_recente = []
+
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
@@ -692,20 +963,38 @@ elif modul_ales == "Pontaj":
 
                 c4, c5 = st.columns([1, 1])
                 ore = c4.number_input("Număr Ore (ex: 1.5 = 1h30m)", min_value=0.1, max_value=24.0, step=0.25, value=1.0)
-                tarif = c5.number_input("Tarif Orar (RON)", min_value=0.0, step=50.0, value=0.0)
+                tarif = c5.number_input("Tarif Orar (lasă 0 pentru calcul automat din CAJ/Abonament)", min_value=0.0, step=10.0, value=0.0)
 
                 act = st.text_area("Descrierea activității prestate *")
 
                 if st.form_submit_button("Înregistrează Orele") and act:
                     dosar_id_val = d_map.get(ds_p, None) if ds_p != "(Niciun dosar)" else None
+                    cl_id_val = c_map[cl_p]
+
+                    tarif_aplicat, val_totala_calc, moneda_calc, nota_tarif = calculeaza_tarif_si_valoare_pontaj(
+                        cl_id_val, dt_p, ore, tarif
+                    )
+
                     conn = get_connection()
                     cur = conn.cursor()
                     cur.execute("""
-                        INSERT INTO pontaj (data_activitate, utilizator_id, client_id, dosar_id, descriere_activitate, ore_lucrate, onorariu_orar)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (dt_p, id_utilizator_curent, c_map[cl_p], dosar_id_val, act, ore, tarif))
+                        INSERT INTO pontaj (data_activitate, utilizator_id, client_id, dosar_id, descriere_activitate, ore_lucrate, onorariu_orar, valoare_totala, moneda)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (dt_p, id_utilizator_curent, cl_id_val, dosar_id_val, act, ore, tarif_aplicat, val_totala_calc, moneda_calc))
                     conn.commit()
                     conn.close()
+
+                    mesaje_rez = []
+                    if nota_tarif:
+                        mesaje_rez.append(("info", f"💶 {nota_tarif}"))
+
+                    alerte_noi = verifica_abonament_dupa_pontaj(cl_id_val, dt_p)
+                    if alerte_noi:
+                        mesaje_rez.extend(alerte_noi)
+
+                    if mesaje_rez:
+                        st.session_state.alerte_pontaj_recente = mesaje_rez
+
                     st.success("Activitatea a fost pontată cu succes!")
                     st.rerun()
 
@@ -721,7 +1010,11 @@ elif modul_ales == "Pontaj":
             COALESCE(d.numar_dosar, '-') AS 'Dosar',
             p.descriere_activitate AS 'Descriere Activitate',
             p.ore_lucrate AS 'Ore',
-            CONCAT(ROUND(p.ore_lucrate * p.onorariu_orar, 2), ' RON') AS 'Total Estimativ'
+            CONCAT(p.onorariu_orar, ' ', COALESCE(p.moneda, 'RON'), '/h') AS 'Tarif Aplicat',
+            CONCAT(
+                CASE WHEN COALESCE(p.valoare_totala, 0) > 0 THEN p.valoare_totala ELSE ROUND(p.ore_lucrate * p.onorariu_orar, 2) END,
+                ' ', COALESCE(p.moneda, 'RON')
+            ) AS 'Total Estimativ'
         FROM pontaj p
         JOIN utilizatori u ON p.utilizator_id = u.id
         JOIN clienti c ON p.client_id = c.id
