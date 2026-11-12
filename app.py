@@ -9,10 +9,9 @@ from db_config import get_connection
 
 st.set_page_config(page_title="CRM Toca Law", page_icon="⚖️", layout="wide")
 
-# --- STILIZARE MENIU LATERAL (ZONA LOGO ALBĂ + BARĂ ALBASTRU ROYAL + BUTOANE CU ICONURI PNG) ---
+# --- STILIZARE MENIU LATERAL ---
 st.markdown("""
 <style>
-    /* Partea de sus (logo + utilizator) albă (primii 185px), iar tot restul barei până jos Albastru Royal */
     section[data-testid="stSidebar"] {
         background: linear-gradient(180deg, #FFFFFF 0px, #FFFFFF 185px, #1E3A8A 185px, #1E3A8A 100%) !important;
         border-right: 1px solid #CBD5E1 !important;
@@ -25,7 +24,6 @@ st.markdown("""
         background: transparent !important;
     }
 
-    /* Selectorul de utilizator pe zona albă */
     section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
         background-color: #F8FAFC !important;
         border: 1px solid #CBD5E1 !important;
@@ -36,7 +34,6 @@ st.markdown("""
         margin-bottom: 18px !important;
     }
 
-    /* Stilizare chenare butoane din zona Albastru Royal */
     section[data-testid="stSidebar"] div.stButton > button {
         width: 100% !important;
         border-radius: 10px !important;
@@ -51,19 +48,18 @@ st.markdown("""
         gap: 6px !important;
     }
 
-    /* Buton inactiv (chenar alb pe Albastru Royal) */
     section[data-testid="stSidebar"] div.stButton > button[kind="secondary"] {
         background-color: rgba(255, 255, 255, 0.08) !important;
         border: 1px solid rgba(255, 255, 255, 0.28) !important;
         color: #FFFFFF !important;
     }
+
     section[data-testid="stSidebar"] div.stButton > button[kind="secondary"]:hover {
         background-color: rgba(255, 255, 255, 0.18) !important;
         border-color: rgba(255, 255, 255, 0.55) !important;
         color: #FFFFFF !important;
     }
 
-    /* Buton activ (Verde Smarald) */
     section[data-testid="stSidebar"] div.stButton > button[kind="primary"] {
         background-color: #00B87C !important;
         border: 1px solid #00B87C !important;
@@ -71,7 +67,6 @@ st.markdown("""
         box-shadow: 0 3px 10px rgba(0, 184, 124, 0.35) !important;
     }
 
-    /* Injectare icon-uri PNG albe în interiorul fiecărui buton */
     section[data-testid="stSidebar"] div.stButton > button::before {
         content: "" !important;
         display: block !important;
@@ -101,7 +96,6 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- FUNCȚII DE INTEROGARE PORTALURI ---
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
 def interogheaza_portal_just(numar_dosar):
@@ -175,117 +169,4 @@ def interogheaza_cnsc(input_dosar):
             celule_gasite = None
             for r in rows:
                 c = [td.inner_text().strip() for td in r.locator("td").all()]
-                if len(c) >= 6 and c[0] == nr_dosar:
-                    celule_gasite = c
-                    break
-            if not celule_gasite:
-                browser.close()
-                return None
-
-            contestator = celule_gasite[2]
-            autoritate = celule_gasite[3]
-            complet_cnsc = celule_gasite[4]
-            status_dosar = celule_gasite[5]
-
-            detalii_text = status_dosar
-            termen_decizie = "-"
-            sedinte_istoric = []
-
-            butoane = page.locator("tbody tr td a, tbody tr td input, tbody tr td button").all()
-            if butoane:
-                try:
-                    butoane[0].click()
-                    page.wait_for_timeout(2500)
-                    body_txt = page.locator("body").inner_text()
-                    for line in body_txt.splitlines():
-                        l_curat = line.strip()
-                        if "Solutie:" in l_curat or "Soluție:" in l_curat or "Decizie" in l_curat:
-                            detalii_text = l_curat
-                        if "Data decizie" in l_curat:
-                            termen_decizie = l_curat
-                except Exception:
-                    pass
-
-            browser.close()
-            return {
-                "numar_formatat": f"{nr_dosar}/{complet_cnsc}/{an_dosar}",
-                "institutie": "CNSC",
-                "complet": complet_cnsc,
-                "obiect": f"{contestator} vs. {autoritate}",
-                "ultimul_termen": termen_decizie,
-                "ultima_solutie": detalii_text,
-                "parti": [
-                    {"Nume": contestator, "Calitate": "Contestator"},
-                    {"Nume": autoritate, "Calitate": "Autoritate Contractantă"}
-                ],
-                "sedinte": sedinte_istoric
-            }
-    except Exception:
-        return None
-
-def interogheaza_iccj(numar_dosar):
-    return interogheaza_portal_just(numar_dosar)
-
-def executa_interogare(numar_dosar, sursa):
-    if sursa == "CNSC":
-        return interogheaza_cnsc(numar_dosar)
-    elif sursa == "ICCJ (scj.ro)":
-        return interogheaza_iccj(numar_dosar)
-    else:
-        return interogheaza_portal_just(numar_dosar)
-
-# --- BARA LATERALĂ & NAVIGARE ---
-def img_to_css_url(filename):
-    if os.path.exists(filename):
-        with open(filename, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-        return f'url("data:image/png;base64,{b64}")'
-    return "none"
-
-st.markdown(f"""
-<style>
-    :root {{
-        --icon-dosare: {img_to_css_url("File.png")};
-        --icon-clienti: {img_to_css_url("Mood Dollar.png")};
-        --icon-pontaj: {img_to_css_url("Alarm.png")};
-        --icon-sarcini: {img_to_css_url("Clipboard.png")};
-        --icon-cautare: {img_to_css_url("Zoom Check.png")};
-    }}
-</style>
-""", unsafe_allow_html=True)
-
-logo_gasit = None
-for ext in ["", ".png", ".jpg", ".jpeg", ".webp"]:
-    nume_fisier = f"220420_[1000xpx]_LOGO_AT{ext}"
-    if os.path.exists(nume_fisier):
-        logo_gasit = nume_fisier
-        break
-
-if logo_gasit:
-    with open(logo_gasit, "rb") as img_f:
-        b64_logo = base64.b64encode(img_f.read()).decode()
-    ext_mime = "png" if not logo_gasit.lower().endswith(("jpg", "jpeg")) else "jpeg"
-    st.sidebar.markdown(f"""
-        <div style="background-color: #FFFFFF; padding: 8px 6px; text-align: center; margin-bottom: 10px;">
-            <img src="data:image/{ext_mime};base64,{b64_logo}" style="max-width: 100%; height: auto; display: block; margin: 0 auto;" />
-        </div>
-    """, unsafe_allow_html=True)
-
-conn = get_connection()
-cur = conn.cursor()
-cur.execute("SELECT id, nume, rol FROM utilizatori WHERE activ = 1 ORDER BY id ASC")
-useri_db = cur.fetchall()
-conn.close()
-
-user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Avocat Coordonator": 1}
-utilizator_selectat = st.sidebar.selectbox("Utilizator", list(user_dict.keys()), key="sel_user_sidebar", label_visibility="collapsed")
-id_utilizator_curent = user_dict[utilizator_selectat]
-
-if "modul_ales" not in st.session_state:
-    st.session_state.modul_ales = "Dosare"
-
-optiuni_meniu = ["Dosare", "Clienți", "Pontaj", "Sarcini", "Căutare"]
-for idx_m, nume_modul in enumerate(optiuni_meniu, start=1):
-    st.sidebar.markdown(f'<span class="nav-marker-{idx_m}" style="display:none;"></span>', unsafe_allow_html=True)
-    este_activ = (st.session_state.modul_ales == nume_modul)
-    if st.sidebar.button(nume_modul, key=f
+                if len(c) >=
