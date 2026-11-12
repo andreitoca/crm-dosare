@@ -95,7 +95,98 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+# --- AUTO-VERIFICARE ȘI REPARARE TABELE BAZĂ DE DATE ---
+def asigura_structura_db():
+    conn = get_connection()
+    cur = conn.cursor()
+    
+    # 1. Tabelul clienti
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS clienti (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            denumire VARCHAR(255) NOT NULL,
+            tip_client VARCHAR(50) DEFAULT 'PJ (Companie)',
+            cui_cnp VARCHAR(100) DEFAULT '',
+            adresa TEXT,
+            reprezentant VARCHAR(255) DEFAULT '',
+            telefon VARCHAR(100) DEFAULT '',
+            email VARCHAR(150) DEFAULT ''
+        )
+    """)
+    
+    # Adăugăm coloanele dacă tabelul clienti exista deja într-o formă mai veche
+    coloane_clienti = [
+        ("tip_client", "VARCHAR(50) DEFAULT 'PJ (Companie)'"),
+        ("cui_cnp", "VARCHAR(100) DEFAULT ''"),
+        ("adresa", "TEXT"),
+        ("reprezentant", "VARCHAR(255) DEFAULT ''"),
+        ("telefon", "VARCHAR(100) DEFAULT ''"),
+        ("email", "VARCHAR(150) DEFAULT ''")
+    ]
+    for nume_col, tip_col in coloane_clienti:
+        try:
+            cur.execute(f"ALTER TABLE clienti ADD COLUMN {nume_col} {tip_col}")
+        except Exception:
+            pass
 
+    # 2. Tabelul contracte (CAJ)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS contracte (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            serie_numar VARCHAR(100),
+            data_contract DATE,
+            client_id INT,
+            obiect_contract TEXT,
+            tip_onorariu VARCHAR(50),
+            valoare_onorariu DECIMAL(12,2) DEFAULT 0,
+            moneda VARCHAR(20) DEFAULT 'RON',
+            status VARCHAR(50) DEFAULT 'Activ'
+        )
+    """)
+
+    # 3. Tabelul pontaj
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS pontaj (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            data_activitate DATE,
+            utilizator_id INT DEFAULT 1,
+            client_id INT,
+            dosar_id INT NULL,
+            descriere_activitate TEXT,
+            ore_lucrate DECIMAL(6,2) DEFAULT 1.0,
+            onorariu_orar DECIMAL(10,2) DEFAULT 0.0
+        )
+    """)
+
+    # 4. Tabelul sarcini
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS sarcini (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            titlu VARCHAR(255),
+            descriere TEXT,
+            termen_limita DATE,
+            ora_limita VARCHAR(20) DEFAULT '16:00',
+            atribuit_lui INT DEFAULT 1,
+            creat_de INT DEFAULT 1,
+            client_id INT NULL,
+            dosar_id INT NULL,
+            prioritate VARCHAR(50) DEFAULT 'Normală',
+            status VARCHAR(50) DEFAULT 'În lucru'
+        )
+    """)
+
+    try:
+        cur.execute("ALTER TABLE dosare ADD COLUMN client_id INT NULL")
+    except Exception:
+        pass
+
+    conn.commit()
+    conn.close()
+
+try:
+    asigura_structura_db()
+except Exception:
+    pass
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
 def interogheaza_portal_just(numar_dosar):
