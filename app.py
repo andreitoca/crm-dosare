@@ -14,7 +14,7 @@ from db_config import get_connection
 
 st.set_page_config(page_title="CRM Toca Law", page_icon="⚖️", layout="wide")
 
-# --- STILIZARE MENIU LATERAL ---
+# --- STILIZARE MENIU LATERAL & ELEMENTE PONTAJ ---
 st.markdown("""
 <style>
     section[data-testid="stSidebar"] {
@@ -205,17 +205,34 @@ def asigura_structura_db_o_data():
                 ore_lucrate DECIMAL(6,2) DEFAULT 1.0,
                 onorariu_orar DECIMAL(10,2) DEFAULT 0.0,
                 valoare_totala DECIMAL(12,2) DEFAULT 0.0,
-                moneda VARCHAR(20) DEFAULT 'RON'
+                moneda VARCHAR(20) DEFAULT 'RON',
+                ora_start VARCHAR(10) DEFAULT '',
+                ora_stop VARCHAR(10) DEFAULT ''
             )
         """)
         for nume_col, tip_col in [
             ("valoare_totala", "DECIMAL(12,2) DEFAULT 0.0"),
-            ("moneda", "VARCHAR(20) DEFAULT 'RON'")
+            ("moneda", "VARCHAR(20) DEFAULT 'RON'"),
+            ("ora_start", "VARCHAR(10) DEFAULT ''"),
+            ("ora_stop", "VARCHAR(10) DEFAULT ''")
         ]:
             try:
                 cur.execute(f"ALTER TABLE pontaj ADD COLUMN {nume_col} {tip_col}")
             except Exception:
                 pass
+
+        # Tabel pentru cronometrul activ în timp real (persista între sesiuni/pagini)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS pontaj_activ (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                utilizator_id INT NOT NULL,
+                client_id INT NOT NULL,
+                dosar_id INT NULL,
+                descriere TEXT,
+                start_ts BIGINT NOT NULL,
+                alerta_10h_trimisa TINYINT(1) DEFAULT 0
+            )
+        """)
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sarcini (
@@ -325,23 +342,26 @@ def get_contracte_cached(an_crt, luna_crt):
     return rows
 
 @st.cache_data(ttl=60, show_spinner=False)
-def get_pontaj_cached():
+def get_pontaj_detaliat_cached():
     conn = get_connection()
     cur = conn.cursor()
     cur.execute("""
         SELECT
-            p.id AS ID,
-            p.data_activitate AS 'Data',
-            u.nume AS 'Avocat',
-            c.denumire AS 'Client',
-            COALESCE(d.numar_dosar, '-') AS 'Dosar',
-            p.descriere_activitate AS 'Descriere Activitate',
-            p.ore_lucrate AS 'Ore',
-            CONCAT(p.onorariu_orar, ' ', COALESCE(p.moneda, 'RON'), '/h') AS 'Tarif Aplicat',
-            CONCAT(
-                CASE WHEN COALESCE(p.valoare_totala, 0) > 0 THEN p.valoare_totala ELSE ROUND(p.ore_lucrate * p.onorariu_orar, 2) END,
-                ' ', COALESCE(p.moneda, 'RON')
-            ) AS 'Total Estimativ'
+            p.id,
+            p.data_activitate,
+            p.utilizator_id,
+            u.nume AS avocat_nume,
+            p.client_id,
+            c.denumire AS client_nume,
+            p.dosar_id,
+            COALESCE(d.numar_dosar, '') AS numar_dosar,
+            p.descriere_activitate,
+            p.ore_lucrate,
+            p.onorariu_orar,
+            p.valoare_totala,
+            COALESCE(p.moneda, 'RON') AS moneda,
+            COALESCE(p.ora_start, '') AS ora_start,
+            COALESCE(p.ora_stop, '') AS ora_stop
         FROM pontaj p
         JOIN utilizatori u ON p.utilizator_id = u.id
         JOIN clienti c ON p.client_id = c.id
@@ -380,11 +400,24 @@ def goleste_cache_date():
     get_clienti_cached.clear()
     get_dosare_cached.clear()
     get_contracte_cached.clear()
-    get_pontaj_cached.clear()
+    get_pontaj_detaliat_cached.clear()
     get_sarcini_cached.clear()
 
+# --- UTILITARE ORE / MINUTE ---
+def formateaza_ore_minute(ore_zecimale):
+    total_min = int(round(float(ore_zecimale or 0) * 60))
+    h = total_min // 60
+    m = total_min % 60
+    return f"{h}:{m:02d} h ({h}h {m}m)"
+
+def formateaza_hh_mm(ore_zecimale):
+    total_min = int(round(float(ore_zecimale or 0) * 60))
+    h = total_min // 60
+    m = total_min % 60
+    return f"{h}:{m:02d}"
+
 # --- CALCUL TARIF AUTOMAT PE ABONAMENT + DEPĂȘIRE ---
-def calculeaza_tarif_si_valoare_pontaj(client_id, data_activitate, ore_noi, tarif_manual):
+def calculeaza_tarif_si_valoare_pontaj(client_id, data_activitate, ore_noi, tarif_manual, exclude_pontaj_id=None):
     an_int = data_activitate.year
     luna_int = data_activitate.month
 
@@ -398,11 +431,18 @@ def calculeaza_tarif_si_valoare_pontaj(client_id, data_activitate, ore_noi, tari
     """, (client_id,))
     contract = cur.fetchone()
 
-    cur.execute("""
-        SELECT COALESCE(SUM(ore_lucrate), 0) AS ore_anterioare
-        FROM pontaj
-        WHERE client_id = %s AND YEAR(data_activitate) = %s AND MONTH(data_activitate) = %s
-    """, (client_id, an_int, luna_int))
+    if exclude_pontaj_id:
+        cur.execute("""
+            SELECT COALESCE(SUM(ore_lucrate), 0) AS ore_anterioare
+            FROM pontaj
+            WHERE client_id = %s AND YEAR(data_activitate) = %s AND MONTH(data_activitate) = %s AND id != %s
+        """, (client_id, an_int, luna_int, exclude_pontaj_id))
+    else:
+        cur.execute("""
+            SELECT COALESCE(SUM(ore_lucrate), 0) AS ore_anterioare
+            FROM pontaj
+            WHERE client_id = %s AND YEAR(data_activitate) = %s AND MONTH(data_activitate) = %s
+        """, (client_id, an_int, luna_int))
     res_ore = cur.fetchone()
     conn.close()
 
@@ -452,8 +492,8 @@ def calculeaza_tarif_si_valoare_pontaj(client_id, data_activitate, ore_noi, tari
 
     return 0.0, 0.0, moneda_crt, None
 
-# --- FUNCȚIE TRIMITERE ALERTE ABONAMENT ---
-def trimite_alerta_abonament(client_nume, serie_caj, ore_incluse, ore_lucrate, procent, prag_label, luna_curenta, tarif_depasire=0.0, moneda="EUR"):
+# --- FUNCȚIE TRIMITERE EMAIL GENERALĂ (ALERTE ABONAMENT + ALERTĂ 10 ORE) ---
+def trimite_email_echipa(subiect, html_body):
     conn = get_connection()
     cur = conn.cursor()
     destinatari_lista = []
@@ -490,9 +530,30 @@ def trimite_alerta_abonament(client_nume, serie_caj, ore_incluse, ore_lucrate, p
         return False, "Credențialele SMTP sau adresele echipei nu sunt configurate."
 
     destinatari_lista = list(dict.fromkeys(destinatari_lista))
+
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subiect
+    msg["From"] = f"CRM Toca Law <{expeditor}>"
+    msg["To"] = ", ".join(destinatari_lista)
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    try:
+        if smtp_port == 465:
+            ctx = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=20)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=20)
+            server.starttls()
+        server.login(expeditor, parola)
+        server.sendmail(expeditor, destinatari_lista, msg.as_string())
+        server.quit()
+        return True, f"Alertă trimisă echipei ({', '.join(destinatari_lista)})!"
+    except Exception as e:
+        return False, f"Eroare trimitere email: {e}"
+
+def trimite_alerta_abonament(client_nume, serie_caj, ore_incluse, ore_lucrate, procent, prag_label, luna_curenta, tarif_depasire=0.0, moneda="EUR"):
     culoare_banner = "#D97706" if prag_label == "80%" else "#DC2626"
     subiect = f"[Alertă Abonament {prag_label}] {client_nume} - {ore_lucrate:.2f} / {ore_incluse:.2f} ore ({luna_curenta})"
-
     info_tarif_nou = ""
     if prag_label == "100%" and tarif_depasire > 0:
         info_tarif_nou = f"<p style='color: #DC2626; font-weight: bold;'>Notă facturare: Pentru restul lunii {luna_curenta}, orele suplimentare se tarifează la {tarif_depasire:.2f} {moneda}/oră.</p>"
@@ -513,26 +574,29 @@ def trimite_alerta_abonament(client_nume, serie_caj, ore_incluse, ore_lucrate, p
             <p style="font-size: 12px; color: #64748B;">Notificare generată automat de sistemul CRM Toca Law la înregistrarea pontajului.</p>
         </div>
     </body></html>"""
+    return trimite_email_echipa(subiect, html)
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subiect
-    msg["From"] = f"CRM Toca Law <{expeditor}>"
-    msg["To"] = ", ".join(destinatari_lista)
-    msg.attach(MIMEText(html, "html", "utf-8"))
-
-    try:
-        if smtp_port == 465:
-            ctx = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=20)
-        else:
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=20)
-            server.starttls()
-        server.login(expeditor, parola)
-        server.sendmail(expeditor, destinatari_lista, msg.as_string())
-        server.quit()
-        return True, f"Alertă {prag_label} trimisă echipei ({', '.join(destinatari_lista)})!"
-    except Exception as e:
-        return False, f"Eroare trimitere email alertă: {e}"
+def trimite_alerta_cronometru_10h(avocat_nume, client_nume, descriere_act, ore_scurse, ora_start_str):
+    h = int(ore_scurse)
+    m = int(round((ore_scurse - h) * 60))
+    subiect = f"[Alertă Cronometru > 10 ore] {avocat_nume} - {client_nume} ({h}h {m}m)"
+    html = f"""<!DOCTYPE html>
+    <html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>
+    <body style="font-family: Arial, sans-serif; color: #1E293B; padding: 15px;">
+        <div style="background-color: #DC2626; color: white; padding: 14px 18px; border-radius: 8px;">
+            <h3 style="margin: 0; color: white;">⏰ Alertă Cronometru Pontaj Activ peste 10 Ore</h3>
+        </div>
+        <div style="padding: 16px; border: 1px solid #E2E8F0; border-radius: 8px; margin-top: 10px; background-color: #F8FAFC;">
+            <p><strong>Avocat:</strong> {avocat_nume}</p>
+            <p><strong>Client:</strong> {client_nume}</p>
+            <p><strong>Activitate:</strong> {descriere_act or '-'}</p>
+            <p><strong>Pornit la:</strong> {ora_start_str}</p>
+            <p><strong>Durată continuă atinsă:</strong> <span style="font-size: 16px; font-weight: bold; color: #DC2626;">{h} ore și {m} minute</span></p>
+            <hr style="border: none; border-top: 1px solid #CBD5E1; margin: 14px 0;">
+            <p style="font-size: 12px; color: #64748B;">Vă rugăm să verificați dacă cronometrul a fost lăsat pornit din greșeală și să îl opriți / ajustații durata din modulul Pontaj.</p>
+        </div>
+    </body></html>"""
+    return trimite_email_echipa(subiect, html)
 
 def verifica_abonament_dupa_pontaj(client_id, data_activitate):
     luna_str = data_activitate.strftime("%Y-%m")
@@ -721,6 +785,44 @@ def executa_interogare(numar_dosar, sursa):
     else:
         return interogheaza_portal_just(numar_dosar)
 
+# --- VERIFICARE GLOBALĂ CRONOMETRU > 10 ORE LA ORICE ACCESARE ---
+def verifica_cronometre_peste_10_ore():
+    try:
+        acum_ts = int(datetime.now().timestamp())
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT pa.id, pa.start_ts, pa.descriere, pa.alerta_10h_trimisa, u.nume AS avocat_nume, c.denumire AS client_nume
+            FROM pontaj_activ pa
+            JOIN utilizatori u ON pa.utilizator_id = u.id
+            JOIN clienti c ON pa.client_id = c.id
+        """)
+        active_rows = cur.fetchall()
+        alerte_active_ui = []
+
+        for r in active_rows:
+            secunde_scurse = max(0, acum_ts - int(r["start_ts"]))
+            ore_scurse = secunde_scurse / 3600.0
+            if ore_scurse >= 10.0:
+                ora_start_str = datetime.fromtimestamp(int(r["start_ts"])).strftime("%d.%m.%Y %H:%M")
+                h_sc = int(ore_scurse)
+                m_sc = int(round((ore_scurse - h_sc) * 60))
+                alerte_active_ui.append(
+                    f"⏰ Atenție: Cronometrul lui **{r['avocat_nume']}** pentru **{r['client_nume']}** merge continuu de **{h_sc}h {m_sc}m** (pornit la {ora_start_str})!"
+                )
+                if int(r.get("alerta_10h_trimisa") or 0) == 0:
+                    trimite_alerta_cronometru_10h(
+                        r["avocat_nume"], r["client_nume"], r.get("descriere") or "-", ore_scurse, ora_start_str
+                    )
+                    cur.execute("UPDATE pontaj_activ SET alerta_10h_trimisa = 1 WHERE id = %s", (r["id"],))
+                    conn.commit()
+        conn.close()
+        return alerte_active_ui
+    except Exception:
+        return []
+
+alerte_10h_globale = verifica_cronometre_peste_10_ore()
+
 # --- BARA LATERALĂ & NAVIGARE ---
 icons_css, logo_html = incarca_resurse_vizuale()
 
@@ -769,6 +871,9 @@ for idx_m, nume_modul in enumerate(optiuni_meniu, start=1):
         st.rerun()
 
 modul_ales = st.session_state.modul_ales
+
+for msg_10h in alerte_10h_globale:
+    st.error(msg_10h)
 
 # === 1. PORTOFOLIU DOSARE ===
 if modul_ales == "Dosare":
@@ -1080,11 +1185,11 @@ elif modul_ales == "Clienți":
         else:
             st.info("Niciun contract înregistrat momentan. Folosește formularul de mai sus pentru a adăuga primul contract.")
 
-# === 3. PONTAJ & TIMESHEET ===
+# === 3. PONTAJ & TIMESHEET (CRONOMETRU LIVE + MANUAL + EDITARE/ȘTERGERE) ===
 elif modul_ales == "Pontaj":
     st.markdown("""
         <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
-            <h2 style="margin: 0; font-size: 22px; color: white;">⏱️ Pontaj & Timesheet Ore Lucrate</h2>
+            <h2 style="margin: 0; font-size: 22px; color: white;">⏱️ Pontaj & Timesheet în Timp Real</h2>
         </div>
     """, unsafe_allow_html=True)
 
@@ -1102,63 +1207,357 @@ elif modul_ales == "Pontaj":
     d_list = get_dosare_cached()
 
     c_map = {c['denumire']: c['id'] for c in c_list}
+    c_rev_map = {c['id']: c['denumire'] for c in c_list}
     d_map = {d['Număr Dosar']: d['ID'] for d in d_list}
+    d_rev_map = {d['ID']: d['Număr Dosar'] for d in d_list}
 
-    with st.expander("➕ Adaugă Pontaj Nou", expanded=True):
-        if not c_map:
-            st.warning("Adaugă mai întâi cel puțin un client în sistem.")
-        else:
-            with st.form("form_add_timesheet", clear_on_submit=True):
-                c1, c2, c3 = st.columns([1, 1.5, 1.5])
-                dt_p = c1.date_input("Data Activității", value=date.today())
-                cl_p = c2.selectbox("Client *", list(c_map.keys()))
-                ds_p = c3.selectbox("Dosar asociat (opțional)", ["(Niciun dosar)"] + list(d_map.keys()))
+    # --- BARA DE PONTAJ ÎN TIMP REAL (STIL CLOCKIFY / TOGGL) ---
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id, client_id, dosar_id, descriere, start_ts
+        FROM pontaj_activ
+        WHERE utilizator_id = %s
+        ORDER BY id DESC LIMIT 1
+    """, (id_utilizator_curent,))
+    cronometru_activ = cur.fetchone()
+    conn.close()
 
-                c4, c5 = st.columns([1, 1])
-                ore = c4.number_input("Număr Ore (ex: 1.5 = 1h30m)", min_value=0.1, max_value=24.0, step=0.25, value=1.0)
-                tarif = c5.number_input("Tarif Orar (lasă 0 pentru calcul automat din CAJ/Abonament)", min_value=0.0, step=10.0, value=0.0)
+    if not c_map:
+        st.warning("Adaugă mai întâi cel puțin un client în modulul 'Clienți' pentru a putea ponta.")
+    else:
+        # Container stilizat pentru bara superioară de cronometru
+        st.markdown("""
+            <div style="background-color:#FFFFFF; border:1px solid #CBD5E1; border-radius:10px; padding:12px 16px; box-shadow:0 2px 6px rgba(15,23,42,0.05); margin-bottom:16px;">
+                <div style="font-size:12px; font-weight:700; color:#1E3A8A; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:8px;">
+                    ▶️ Cronometru Activitate în Timp Real
+                </div>
+        """, unsafe_allow_html=True)
 
-                act = st.text_area("Descrierea activității prestate *")
+        if cronometru_activ:
+            # Există un cronometru pornit pentru utilizatorul curent!
+            acum_ts = int(datetime.now().timestamp())
+            sec_scurse = max(0, acum_ts - int(cronometru_activ["start_ts"]))
+            ore_scurse_dec = sec_scurse / 3600.0
+            h_live = sec_scurse // 3600
+            m_live = (sec_scurse % 3600) // 60
+            ora_pornire_fmt = datetime.fromtimestamp(int(cronometru_activ["start_ts"])).strftime("%H:%M")
+            nume_cl_activ = c_rev_map.get(cronometru_activ["client_id"], "Client")
+            nr_ds_activ = d_rev_map.get(cronometru_activ["dosar_id"], "") if cronometru_activ.get("dosar_id") else ""
 
-                if st.form_submit_button("Înregistrează Orele") and act:
-                    dosar_id_val = d_map.get(ds_p, None) if ds_p != "(Niciun dosar)" else None
-                    cl_id_val = c_map[cl_p]
+            col_info, col_ceas, col_stop, col_cancel = st.columns([3.5, 1.3, 1.1, 0.8])
+            with col_info:
+                descriere_live = st.text_input(
+                    "Activitate în curs",
+                    value=cronometru_activ.get("descriere") or "",
+                    placeholder="Descrie activitatea la care lucrezi...",
+                    key="live_desc_edit",
+                    label_visibility="collapsed"
+                )
+                eticheta_sub = f"🏢 **{nume_cl_activ}**" + (f" • 📁 Dosar `{nr_ds_activ}`" if nr_ds_activ else "") + f" • Pornit la **{ora_pornire_fmt}**"
+                st.caption(eticheta_sub)
 
-                    tarif_aplicat, val_totala_calc, moneda_calc, nota_tarif = calculeaza_tarif_si_valoare_pontaj(
-                        cl_id_val, dt_p, ore, tarif
+            with col_ceas:
+                culoare_ceas = "#DC2626" if h_live >= 10 else "#00B87C"
+                st.markdown(
+                    f"<div style='background:#F8FAFC; border:2px solid {culoare_ceas}; border-radius:8px; padding:6px 10px; text-align:center; font-size:20px; font-weight:800; color:{culoare_ceas};'>"
+                    f"{h_live}:{m_live:02d} h"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+
+            with col_stop:
+                if st.button("⏹️ STOP", type="primary", use_container_width=True, help="Oprește ceasul și salvează pontajul"):
+                    # Calculăm durata în ore/minute (minim 1 minut = 0.02h dacă a fost oprit sub 1 min)
+                    total_minute = max(1, int(round(sec_scurse / 60.0)))
+                    ore_salvate = round(total_minute / 60.0, 2)
+                    dt_azi = date.today()
+                    ora_stop_fmt = datetime.now().strftime("%H:%M")
+                    cl_id_s = cronometru_activ["client_id"]
+                    ds_id_s = cronometru_activ.get("dosar_id")
+                    desc_finala = descriere_live.strip() or "Activitate juridică"
+
+                    tarif_ap, val_tot, mon_c, nota_t = calculeaza_tarif_si_valoare_pontaj(
+                        cl_id_s, dt_azi, ore_salvate, 0.0
                     )
 
                     conn = get_connection()
                     cur = conn.cursor()
                     cur.execute("""
-                        INSERT INTO pontaj (data_activitate, utilizator_id, client_id, dosar_id, descriere_activitate, ore_lucrate, onorariu_orar, valoare_totala, moneda)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (dt_p, id_utilizator_curent, cl_id_val, dosar_id_val, act, ore, tarif_aplicat, val_totala_calc, moneda_calc))
+                        INSERT INTO pontaj (
+                            data_activitate, utilizator_id, client_id, dosar_id,
+                            descriere_activitate, ore_lucrate, onorariu_orar, valoare_totala, moneda, ora_start, ora_stop
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        dt_azi, id_utilizator_curent, cl_id_s, ds_id_s,
+                        desc_finala, ore_salvate, tarif_ap, val_tot, mon_c, ora_pornire_fmt, ora_stop_fmt
+                    ))
+                    cur.execute("DELETE FROM pontaj_activ WHERE id = %s", (cronometru_activ["id"],))
                     conn.commit()
                     conn.close()
 
                     mesaje_rez = []
-                    if nota_tarif:
-                        mesaje_rez.append(("info", f"💶 {nota_tarif}"))
-
-                    alerte_noi = verifica_abonament_dupa_pontaj(cl_id_val, dt_p)
-                    if alerte_noi:
-                        mesaje_rez.extend(alerte_noi)
-
+                    if nota_t:
+                        mesaje_rez.append(("info", f"💶 {nota_t}"))
+                    alerte_ab = verifica_abonament_dupa_pontaj(cl_id_s, dt_azi)
+                    if alerte_ab:
+                        mesaje_rez.extend(alerte_ab)
                     if mesaje_rez:
                         st.session_state.alerte_pontaj_recente = mesaje_rez
 
                     goleste_cache_date()
-                    st.success("Activitatea a fost pontată cu succes!")
                     st.rerun()
 
-    st.subheader(f"Istoric Pontaj ({utilizator_selectat})")
-    pontaj_df = get_pontaj_cached()
+            with col_cancel:
+                if st.button("✖️", use_container_width=True, help="Anulează cronometrul fără a salva"):
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute("DELETE FROM pontaj_activ WHERE id = %s", (cronometru_activ["id"],))
+                    conn.commit()
+                    conn.close()
+                    st.rerun()
 
-    if pontaj_df:
-        st.dataframe(pd.DataFrame(pontaj_df), use_container_width=True, hide_index=True)
+            if st.button("🔄 Actualizează timpul afișat", key="btn_refresh_timer"):
+                st.rerun()
+
+        else:
+            # Niciun cronometru pornit -> afișăm bara de Start exact ca în modelul Clockify
+            col_txt, col_cl, col_ds, col_timp, col_start = st.columns([2.6, 1.5, 1.3, 0.8, 1.0])
+            desc_noua = col_txt.text_input(
+                "La ce lucrezi acum?",
+                placeholder="Ex: Redactare adresă de răspuns / Studiu dosar...",
+                key="timer_desc_input",
+                label_visibility="collapsed"
+            )
+            cl_timer = col_cl.selectbox(
+                "Client",
+                list(c_map.keys()),
+                key="timer_client_sel",
+                label_visibility="collapsed"
+            )
+            ds_timer = col_ds.selectbox(
+                "Dosar",
+                ["(Fără dosar)"] + list(d_map.keys()),
+                key="timer_dosar_sel",
+                label_visibility="collapsed"
+            )
+            col_timp.markdown(
+                "<div style='padding-top:7px; text-align:center; font-size:18px; font-weight:700; color:#64748B;'>0:00</div>",
+                unsafe_allow_html=True
+            )
+            if col_start.button("▶️ START", type="primary", use_container_width=True):
+                cl_id_start = c_map[cl_timer]
+                ds_id_start = d_map.get(ds_timer) if ds_timer != "(Fără dosar)" else None
+                now_ts = int(datetime.now().timestamp())
+
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO pontaj_activ (utilizator_id, client_id, dosar_id, descriere, start_ts, alerta_10h_trimisa)
+                    VALUES (%s, %s, %s, %s, %s, 0)
+                """, (id_utilizator_curent, cl_id_start, ds_id_start, desc_noua.strip(), now_ts))
+                conn.commit()
+                conn.close()
+                st.rerun()
+
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # --- OPȚIUNE DE ADAUGARE MANUALĂ (ORE ȘI MINUTE) ---
+        with st.expander("➕ Adaugă Pontaj Manual (Ore și Minute)", expanded=False):
+            with st.form("form_add_timesheet_manual", clear_on_submit=True):
+                c1, c2, c3 = st.columns([1, 1.5, 1.5])
+                dt_p = c1.date_input("Data Activității", value=date.today())
+                cl_p = c2.selectbox("Client *", list(c_map.keys()))
+                ds_p = c3.selectbox("Dosar asociat (opțional)", ["(Niciun dosar)"] + list(d_map.keys()))
+
+                c4, c5, c6 = st.columns([1, 1, 1.2])
+                ore_m = c4.number_input("Ore", min_value=0, max_value=24, step=1, value=1)
+                min_m = c5.number_input("Minute", min_value=0, max_value=59, step=5, value=0)
+                tarif_m = c6.number_input("Tarif Orar (0 = automat din CAJ)", min_value=0.0, step=10.0, value=0.0)
+
+                act_m = st.text_area("Descrierea activității prestate *")
+
+                if st.form_submit_button("💾 Salvează Pontajul Manual") and act_m:
+                    total_ore_dec = round(ore_m + (min_m / 60.0), 2)
+                    if total_ore_dec <= 0:
+                        st.warning("Introdu cel puțin 1 minut de activitate.")
+                    else:
+                        dosar_id_val = d_map.get(ds_p, None) if ds_p != "(Niciun dosar)" else None
+                        cl_id_val = c_map[cl_p]
+
+                        tarif_aplicat, val_totala_calc, moneda_calc, nota_tarif = calculeaza_tarif_si_valoare_pontaj(
+                            cl_id_val, dt_p, total_ore_dec, tarif_m
+                        )
+
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        cur.execute("""
+                            INSERT INTO pontaj (
+                                data_activitate, utilizator_id, client_id, dosar_id,
+                                descriere_activitate, ore_lucrate, onorariu_orar, valoare_totala, moneda
+                            )
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, (dt_p, id_utilizator_curent, cl_id_val, dosar_id_val, act_m.strip(), total_ore_dec, tarif_aplicat, val_totala_calc, moneda_calc))
+                        conn.commit()
+                        conn.close()
+
+                        mesaje_rez = []
+                        if nota_tarif:
+                            mesaje_rez.append(("info", f"💶 {nota_tarif}"))
+                        alerte_noi = verifica_abonament_dupa_pontaj(cl_id_val, dt_p)
+                        if alerte_noi:
+                            mesaje_rez.extend(alerte_noi)
+                        if mesaje_rez:
+                            st.session_state.alerte_pontaj_recente = mesaje_rez
+
+                        goleste_cache_date()
+                        st.success("Activitatea a fost pontată cu succes!")
+                        st.rerun()
+
+    # --- POP-UP EDITARE ORE / MINUTE / DESCRIERE ---
+    @st.dialog("✏️ Modifică Înregistrarea de Pontaj")
+    def dialog_editeaza_pontaj(row_p):
+        st.caption(f"Client: **{row_p['client_nume']}** • Data: **{row_p['data_activitate']}**")
+        ore_vechi_dec = float(row_p["ore_lucrate"] or 0)
+        tot_min_v = int(round(ore_vechi_dec * 60))
+        h_init = tot_min_v // 60
+        m_init = tot_min_v % 60
+
+        col_eh, col_em = st.columns(2)
+        h_nou = col_eh.number_input("Ore", min_value=0, max_value=24, step=1, value=h_init, key=f"ed_h_{row_p['id']}")
+        m_nou = col_em.number_input("Minute", min_value=0, max_value=59, step=1, value=m_init, key=f"ed_m_{row_p['id']}")
+        desc_noua_ed = st.text_area("Descriere activitate", value=row_p["descriere_activitate"] or "", key=f"ed_d_{row_p['id']}")
+
+        col_save, col_cancel_ed = st.columns(2)
+        if col_save.button("💾 Salvează Modificările", type="primary", use_container_width=True):
+            ore_noi_dec = round(h_nou + (m_nou / 60.0), 2)
+            if ore_noi_dec <= 0:
+                st.error("Durata trebuie să fie mai mare de 0 minute.")
+            else:
+                dt_obj = row_p["data_activitate"]
+                if isinstance(dt_obj, str):
+                    dt_obj = datetime.strptime(dt_obj, "%Y-%m-%d").date()
+
+                tarif_ap, val_tot, mon_c, _ = calculeaza_tarif_si_valoare_pontaj(
+                    row_p["client_id"], dt_obj, ore_noi_dec, 0.0, exclude_pontaj_id=row_p["id"]
+                )
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    UPDATE pontaj
+                    SET ore_lucrate = %s, descriere_activitate = %s, onorariu_orar = %s, valoare_totala = %s, moneda = %s
+                    WHERE id = %s
+                """, (ore_noi_dec, desc_noua_ed.strip(), tarif_ap, val_tot, mon_c, row_p["id"]))
+                conn.commit()
+                conn.close()
+                verifica_abonament_dupa_pontaj(row_p["client_id"], dt_obj)
+                goleste_cache_date()
+                st.rerun()
+
+        if col_cancel_ed.button("❌ Anulează", use_container_width=True):
+            st.rerun()
+
+    # --- POP-UP CONFIRMARE ȘTERGERE PONTAJ ---
+    @st.dialog("⚠️ Confirmare ștergere pontaj")
+    def dialog_sterge_pontaj(p_id, client_n, desc_n, durata_str):
+        st.write(f"Ești sigur că dorești să ștergi înregistrarea de pontaj (**{durata_str}**) pentru **{client_n}**?")
+        st.caption(f"Activitate: {desc_n}")
+        col_da, col_nu = st.columns(2)
+        if col_da.button("✅ Da, șterge", type="primary", use_container_width=True):
+            conn = get_connection()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM pontaj WHERE id = %s", (p_id,))
+            conn.commit()
+            conn.close()
+            goleste_cache_date()
+            st.rerun()
+        if col_nu.button("❌ Nu, păstrează", use_container_width=True):
+            st.rerun()
+
+    # --- LISTĂ ACTIVITĂȚI GRUPATE PE ZILE (STIL CLOCKIFY) ---
+    toate_pontajele = get_pontaj_detaliat_cached()
+
+    col_f1, col_f2 = st.columns([2, 1])
+    filtru_avocat = col_f1.selectbox(
+        "Filtrează istoric după avocat:",
+        ["Toată echipa", utilizator_selectat] + [u for u in user_dict.keys() if u != utilizator_selectat],
+        key="filtru_avocat_pontaj"
+    )
+
+    if filtru_avocat != "Toată echipa":
+        pontaje_afisate = [p for p in toate_pontajele if p["avocat_nume"] == filtru_avocat]
     else:
-        st.info("Nu există înregistrări de pontaj.")
+        pontaje_afisate = toate_pontajele
+
+    # Calcul total azi și total săptămâna curentă
+    azi_dt = date.today()
+    start_sapt = azi_dt.toordinal() - azi_dt.weekday()
+    ore_azi = sum(float(p["ore_lucrate"] or 0) for p in pontaje_afisate if str(p["data_activitate"]) == str(azi_dt))
+    ore_sapt = sum(
+        float(p["ore_lucrate"] or 0) for p in pontaje_afisate
+        if (p["data_activitate"].toordinal() if hasattr(p["data_activitate"], "toordinal") else datetime.strptime(str(p["data_activitate"]), "%Y-%m-%d").date().toordinal()) >= start_sapt
+    )
+
+    with col_f2:
+        st.markdown(
+            f"<div style='background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px; padding:8px 12px; text-align:right; margin-top:24px;'>"
+            f"<span style='font-size:12px; color:#64748B;'>AZI:</span> <strong style='color:#0F172A;'>{formateaza_hh_mm(ore_azi)} h</strong> &nbsp;|&nbsp; "
+            f"<span style='font-size:12px; color:#64748B;'>SĂPTĂMÂNA:</span> <strong style='color:#1E3A8A;'>{formateaza_hh_mm(ore_sapt)} h</strong>"
+            f"</div>",
+            unsafe_allow_html=True
+        )
+
+    if pontaje_afisate:
+        # Grupăm înregistrările pe zile
+        zile_grupate = {}
+        for p in pontaje_afisate:
+            zi_cheie = str(p["data_activitate"])
+            zile_grupate.setdefault(zi_cheie, []).append(p)
+
+        for zi_str, lista_zi in zile_grupate.items():
+            total_ore_zi = sum(float(x["ore_lucrate"] or 0) for x in lista_zi)
+            eticheta_zi = "Astăzi" if zi_str == str(azi_dt) else zi_str
+
+            st.markdown(
+                f"<div style='background-color:#F1F5F9; padding:8px 14px; border-radius:6px; margin-top:14px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;'>"
+                f"<span style='font-weight:700; color:#334155; font-size:13px;'>📅 {eticheta_zi}</span>"
+                f"<span style='font-weight:700; color:#1E3A8A; font-size:13px;'>Total zi: {formateaza_ore_minute(total_ore_zi)}</span>"
+                f"</div>",
+                unsafe_allow_html=True
+            )
+
+            for item in lista_zi:
+                durata_fmt = formateaza_hh_mm(item["ore_lucrate"])
+                val_est = float(item["valoare_totala"] or 0)
+                mon_i = item["moneda"] or "RON"
+                interval_str = f"{item['ora_start']} - {item['ora_stop']}" if (item["ora_start"] and item["ora_stop"]) else "Manual"
+                dosar_badge = f" • 📁 `{item['numar_dosar']}`" if item["numar_dosar"] else ""
+
+                c_desc, c_int, c_dur, c_val, c_ed, c_del = st.columns([4.2, 1.2, 0.9, 1.1, 0.45, 0.45])
+                with c_desc:
+                    st.markdown(
+                        f"<div style='font-size:14px; font-weight:600; color:#0F172A;'>{item['descriere_activitate']}</div>"
+                        f"<div style='font-size:12px; color:#64748B;'>🏢 <strong>{item['client_nume']}</strong>{dosar_badge} • 👤 {item['avocat_nume']}</div>",
+                        unsafe_allow_html=True
+                    )
+                with c_int:
+                    st.markdown(f"<div style='font-size:12px; color:#64748B; padding-top:8px;'>{interval_str}</div>", unsafe_allow_html=True)
+                with c_dur:
+                    st.markdown(f"<div style='font-size:14px; font-weight:700; color:#0F172A; padding-top:6px;'>{durata_fmt} h</div>", unsafe_allow_html=True)
+                with c_val:
+                    val_txt = f"{val_est:.2f} {mon_i}" if val_est > 0 else "-"
+                    st.markdown(f"<div style='font-size:13px; font-weight:600; color:#059669; padding-top:7px;'>{val_txt}</div>", unsafe_allow_html=True)
+                with c_ed:
+                    if st.button("✏️", key=f"ed_p_{item['id']}", help="Modifică orele, minutele sau descrierea"):
+                        dialog_editeaza_pontaj(item)
+                with c_del:
+                    if st.button("🗑️", key=f"del_p_{item['id']}", help="Șterge înregistrarea"):
+                        dialog_sterge_pontaj(item["id"], item["client_nume"], item["descriere_activitate"], f"{durata_fmt} h")
+
+                st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
+    else:
+        st.info("Nu există înregistrări de pontaj. Apasă ▶️ START mai sus pentru a porni cronometrul!")
 
 # === 4. SARCINI DE LUCRU (TASKS) ===
 elif modul_ales == "Sarcini":
