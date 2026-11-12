@@ -623,5 +623,203 @@ elif modul_ales == "👥 Clienți & Contracte (CAJ)":
         
         if caj_df:
             st.dataframe(pd.DataFrame(caj_df), use_container_width=True, hide_index=True)
+
+            with st.expander("🗑️ Șterge un contract de asistență (CAJ)"):
+                optiuni_del_caj = [f"{k['ID']} - {k['Serie/Număr CAJ']} ({k['Client']})" for k in caj_df]
+                contract_de_sters = st.selectbox("Selectează contractul pe care dorești să-l elimini:", optiuni_del_caj)
+                st.warning("Atenție: Ștergerea contractului va elimina definitiv înregistrarea CAJ selectată (clientul și dosarele sale rămân intacte).")
+
+                if st.button("Confirmă Ștergerea Contractului", type="secondary"):
+                    k_id_del = int(contract_de_sters.split(" - ")[0])
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    try:
+                        cur.execute("DELETE FROM contracte WHERE id = %s", (k_id_del,))
+                        conn.commit()
+                        st.success(f"Contractul '{contract_de_sters}' a fost șters cu succes!")
+                    except Exception as e:
+                        st.error(f"Eroare la ștergerea contractului: {e}")
+                    conn.close()
+                    st.rerun()
         else:
             st.info("Niciun contract înregistrat.")
+
+# === 3. PONTAJ & TIMESHEET ===
+elif modul_ales == "⏱️ Pontaj & Timesheet":
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">⏱️ Pontaj & Timesheet Ore Lucrate</h2>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
+    c_list = cur.fetchall()
+    cur.execute("SELECT id, numar_dosar FROM dosare ORDER BY id DESC")
+    d_list = cur.fetchall()
+    conn.close()
+    
+    c_map = {c['denumire']: c['id'] for c in c_list}
+    d_map = {d['numar_dosar']: d['id'] for d in d_list}
+    
+    with st.expander("➕ Adaugă Pontaj Nou", expanded=True):
+        if not c_map:
+            st.warning("Adaugă mai întâi cel puțin un client în sistem.")
+        else:
+            with st.form("form_add_timesheet", clear_on_submit=True):
+                c1, c2, c3 = st.columns([1, 1.5, 1.5])
+                dt_p = c1.date_input("Data Activității", value=date.today())
+                cl_p = c2.selectbox("Client *", list(c_map.keys()))
+                ds_p = c3.selectbox("Dosar asociat (opțional)", ["(Niciun dosar)"] + list(d_map.keys()))
+                
+                c4, c5 = st.columns([1, 1])
+                ore = c4.number_input("Număr Ore (ex: 1.5 = 1h30m)", min_value=0.1, max_value=24.0, step=0.25, value=1.0)
+                tarif = c5.number_input("Tarif Orar (RON)", min_value=0.0, step=50.0, value=0.0)
+                
+                act = st.text_area("Descrierea activității prestate *")
+                
+                if st.form_submit_button("Înregistrează Orele") and act:
+                    dosar_id_val = d_map.get(ds_p, None) if ds_p != "(Niciun dosar)" else None
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    cur.execute("""
+                        INSERT INTO pontaj (data_activitate, utilizator_id, client_id, dosar_id, descriere_activitate, ore_lucrate, onorariu_orar)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (dt_p, id_utilizator_curent, c_map[cl_p], dosar_id_val, act, ore, tarif))
+                    conn.commit()
+                    conn.close()
+                    st.success("Activitatea a fost pontată cu succes!")
+                    st.rerun()
+
+    st.subheader(f"Istoric Pontaj ({utilizator_selectat})")
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT 
+            p.id AS ID,
+            p.data_activitate AS 'Data',
+            u.nume AS 'Avocat',
+            c.denumire AS 'Client',
+            COALESCE(d.numar_dosar, '-') AS 'Dosar',
+            p.descriere_activitate AS 'Descriere Activitate',
+            p.ore_lucrate AS 'Ore',
+            CONCAT(ROUND(p.ore_lucrate * p.onorariu_orar, 2), ' RON') AS 'Total Estimativ'
+        FROM pontaj p
+        JOIN utilizatori u ON p.utilizator_id = u.id
+        JOIN clienti c ON p.client_id = c.id
+        LEFT JOIN dosare d ON p.dosar_id = d.id
+        ORDER BY p.data_activitate DESC, p.id DESC
+    """)
+    pontaj_df = cur.fetchall()
+    conn.close()
+    
+    if pontaj_df:
+        st.dataframe(pd.DataFrame(pontaj_df), use_container_width=True, hide_index=True)
+    else:
+        st.info("Nu există înregistrări de pontaj.")
+
+# === 4. SARCINI DE LUCRU (TASKS) ===
+elif modul_ales == "📌 Sarcini de Lucru (Tasks)":
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">📌 Sarcini de Lucru & Termene Echipă</h2>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
+    cl_t = cur.fetchall()
+    conn.close()
+    cl_t_map = {c['denumire']: c['id'] for c in cl_t}
+    
+    with st.expander("➕ Creează o Sarcină Nouă", expanded=False):
+        with st.form("form_task", clear_on_submit=True):
+            col1, col2 = st.columns([2, 1])
+            titlu = col1.text_input("Titlu Sarcină *")
+            prioritate = col2.selectbox("Prioritate", ["Normală", "Ridicată", "Urgentă"])
+            
+            col3, col4, col5 = st.columns([1.5, 1, 1.5])
+            termen = col3.date_input("Termen Limită", value=date.today())
+            ora = col4.text_input("Ora Limită", value="16:00")
+            atribuit = col5.selectbox("Atribuit către", list(user_dict.keys()))
+            
+            client_asoc = st.selectbox("Client asociat (opțional)", ["(Niciunul)"] + list(cl_t_map.keys()))
+            detalii = st.text_area("Instrucțiuni / Detalii sarcină")
+            
+            if st.form_submit_button("Salvează Sarcina") and titlu:
+                c_id_t = cl_t_map.get(client_asoc, None) if client_asoc != "(Niciunul)" else None
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO sarcini (titlu, descriere, termen_limita, ora_limita, atribuit_lui, creat_de, client_id, prioritate, status)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'În lucru')
+                """, (titlu, detalii, termen, ora, user_dict[atribuit], id_utilizator_curent, c_id_t, prioritate))
+                conn.commit()
+                conn.close()
+                st.success("Sarcina a fost adăugată!")
+                st.rerun()
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT 
+            s.id AS ID,
+            s.titlu AS 'Titlu Sarcină',
+            s.termen_limita AS 'Termen Limită',
+            s.ora_limita AS 'Ora',
+            s.prioritate AS 'Prioritate',
+            u.nume AS 'Responsabil',
+            COALESCE(c.denumire, '-') AS 'Client',
+            s.status AS 'Status'
+        FROM sarcini s
+        JOIN utilizatori u ON s.atribuit_lui = u.id
+        LEFT JOIN clienti c ON s.client_id = c.id
+        ORDER BY s.termen_limita ASC, s.id DESC
+    """)
+    tasks_df = cur.fetchall()
+    conn.close()
+    
+    if tasks_df:
+        st.dataframe(pd.DataFrame(tasks_df), use_container_width=True, hide_index=True)
+        with st.expander("Marchează Sarcină Finalizată"):
+            id_task_fin = st.selectbox("Selectează sarcina", [f"{t['ID']} - {t['Titlu Sarcină']}" for t in tasks_df])
+            if st.button("Marchează ca Finalizată"):
+                tid = int(id_task_fin.split(" - ")[0])
+                conn = get_connection()
+                cur = conn.cursor()
+                cur.execute("UPDATE sarcini SET status = 'Finalizat' WHERE id = %s", (tid,))
+                conn.commit()
+                conn.close()
+                st.success("Sarcina a fost marcată ca finalizată!")
+                st.rerun()
+    else:
+        st.info("Nu există sarcini active.")
+
+# === 5. CĂUTARE PORTAL & ISTORIC ===
+elif modul_ales == "🔍 Căutare Portal & Istoric":
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">🔍 Căutare Rapidă Dosar & Inspectare Istoric</h2>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    c1, c2 = st.columns([2, 1])
+    nr_q = c1.text_input("Număr dosar:", "112/2/2026")
+    sursa_q = c2.selectbox("Sursă:", ["ICCJ (scj.ro)", "Portal.just.ro", "CNSC"])
+    
+    if st.button("Caută Detalii"):
+        with st.spinner(f"Se interoghează {sursa_q}..."):
+            info = executa_interogare(nr_q, sursa_q)
+            if not info:
+                st.warning(f"Dosarul nu a fost găsit pe {sursa_q}.")
+            else:
+                st.markdown(f"**Număr:** `{info.get('numar_formatat', nr_q)}` | **Instanță:** {info['institutie']} | **Complet:** `{info['complet']}`")
+                st.info(f"**Soluție / Stadiu actual:** {info['ultima_solutie']}")
+                if info.get('parti'):
+                    st.write("**Părți în dosar:**")
+                    st.dataframe(pd.DataFrame(info['parti']), use_container_width=True, hide_index=True)
+                if info.get('sedinte'):
+                    st.write("**Istoric Ședințe / Înregistrări:**")
+                    st.dataframe(pd.DataFrame(info['sedinte']), use_container_width=True, hide_index=True)
