@@ -443,7 +443,7 @@ modul_ales = st.sidebar.radio(
     ]
 )
 # === 1. PORTOFOLIU DOSARE ===
-if modul_ales == "📋 Portofoliu Dosare":
+if modul_ales == "📁\nDosare":
     st.markdown("""
         <div style="
             background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%);
@@ -539,7 +539,7 @@ if modul_ales == "📋 Portofoliu Dosare":
         st.info("Nu există dosare monitorizate în acest moment.")
 
 # === 2. CLIENȚI & CONTRACTE (CAJ) ===
-elif modul_ales == "👥 Clienți & Contracte (CAJ)":
+elif modul_ales == "👤\nClienți":
     st.markdown("""
         <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
             <h2 style="margin: 0; font-size: 22px; color: white;">👥 Gestiune Clienți & Contracte de Asistență (CAJ)</h2>
@@ -709,7 +709,7 @@ elif modul_ales == "👥 Clienți & Contracte (CAJ)":
             st.info("Niciun contract înregistrat.")
 
 # === 3. PONTAJ & TIMESHEET ===
-elif modul_ales == "⏱️ Pontaj & Timesheet":
+elif modul_ales == "⏱️\nPontaj":
     st.markdown("""
         <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
             <h2 style="margin: 0; font-size: 22px; color: white;">⏱️ Pontaj & Timesheet Ore Lucrate</h2>
@@ -784,7 +784,7 @@ elif modul_ales == "⏱️ Pontaj & Timesheet":
         st.info("Nu există înregistrări de pontaj.")
 
 # === 4. SARCINI DE LUCRU (TASKS) ===
-elif modul_ales == "📌 Sarcini de Lucru (Tasks)":
+elif modul_ales == "☑️\nSarcini":
     st.markdown("""
         <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
             <h2 style="margin: 0; font-size: 22px; color: white;">📌 Sarcini de Lucru & Termene Echipă</h2>
@@ -862,7 +862,7 @@ elif modul_ales == "📌 Sarcini de Lucru (Tasks)":
         st.info("Nu există sarcini active.")
 
 # === 5. CĂUTARE PORTAL & ISTORIC ===
-elif modul_ales == "🔍 Căutare Portal & Istoric":
+elif modul_ales == "🔍\nCăutare":
     st.markdown("""
         <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
             <h2 style="margin: 0; font-size: 22px; color: white;">🔍 Căutare Rapidă Dosar & Inspectare Istoric</h2>
