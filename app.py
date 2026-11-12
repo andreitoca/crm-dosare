@@ -560,4 +560,46 @@ elif modul_ales == "👥 Clienți & Contracte (CAJ)":
                     
                     c4, c5, c6 = st.columns(3)
                     tip_onor = c4.selectbox("Tip Onorariu", ["Orar", "Fix", "Succes"])
-                    val_
+                    val_onor = c5.number_input("Valoare Onorariu", min_value=0.0, step=50.0)
+                    moneda = c6.selectbox("Monedă", ["RON", "EUR"])
+                    
+                    obiect_caj = st.text_area("Obiectul asistenței juridice")
+                    
+                    if st.form_submit_button("Înregistrează Contractul") and serie_nr:
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        try:
+                            cur.execute("""
+                                INSERT INTO contracte (serie_numar, data_contract, client_id, obiect_contract, tip_onorariu, valoare_onorariu, moneda, status)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, 'Activ')
+                            """, (serie_nr, dt_c, c_dict[client_caj], obiect_caj, tip_onor, val_onor, moneda))
+                            conn.commit()
+                            st.success(f"Contractul {serie_nr} a fost salvat!")
+                        except Exception as e:
+                            st.error(f"Eroare: {e}")
+                        conn.close()
+                        st.rerun()
+                        
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT 
+                k.id AS ID,
+                k.serie_numar AS 'Serie/Număr CAJ',
+                k.data_contract AS 'Data',
+                c.denumire AS 'Client',
+                k.tip_onorariu AS 'Tip Onorariu',
+                CONCAT(k.valoare_onorariu, ' ', k.moneda) AS 'Valoare',
+                k.obiect_contract AS 'Obiect',
+                k.status AS 'Status'
+            FROM contracte k
+            JOIN clienti c ON k.client_id = c.id
+            ORDER BY k.id DESC
+        """)
+        caj_df = cur.fetchall()
+        conn.close()
+        
+        if caj_df:
+            st.dataframe(pd.DataFrame(caj_df), use_container_width=True, hide_index=True)
+        else:
+            st.info("Niciun contract înregistrat.")
