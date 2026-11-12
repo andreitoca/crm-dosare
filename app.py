@@ -19,31 +19,34 @@ st.set_page_config(
 
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
-# --- STILIZARE MENIU LATERAL (TIP RAIL CU PICTOGRAMĂ SUS ȘI TEXT JOS) ---
+import os
+import base64
+
+# --- STILIZARE MENIU LATERAL ---
 st.markdown("""
 <style>
-    /* Fundalul barei laterale în nuanța albastru închis petrol din model */
+    /* Fundalul și lățimea mărită a barei laterale */
     section[data-testid="stSidebar"] {
         background-color: #0B2538 !important;
-        min-width: 115px !important;
-        max-width: 135px !important;
+        min-width: 220px !important;
+        max-width: 240px !important;
     }
 
-    /* Ajustare spațiu interior bară laterală */
     section[data-testid="stSidebar"] > div:first-child {
-        padding: 15px 6px !important;
+        padding: 18px 14px !important;
         background-color: #0B2538 !important;
     }
 
     /* Ascunde eticheta "Navigare:" și cerculețul radio */
     section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"],
-    section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child {
+    section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child,
+    section[data-testid="stSidebar"] div[role="radiogroup"] input[type="radio"] {
         display: none !important;
     }
 
-    /* Elimină spațierea dintre elementele meniului */
+    /* Spațiere între opțiunile meniului */
     section[data-testid="stSidebar"] div[role="radiogroup"] {
-        gap: 2px !important;
+        gap: 6px !important;
         width: 100% !important;
     }
 
@@ -51,8 +54,8 @@ st.markdown("""
     section[data-testid="stSidebar"] div[role="radiogroup"] label {
         background-color: transparent !important;
         border: none !important;
-        border-radius: 6px !important;
-        padding: 14px 4px !important;
+        border-radius: 8px !important;
+        padding: 12px 8px !important;
         width: 100% !important;
         display: flex !important;
         flex-direction: column !important;
@@ -63,10 +66,10 @@ st.markdown("""
         transition: background-color 0.2s ease !important;
     }
 
-    /* Textul și pictograma (deasupra textului prin white-space: pre-line) */
+    /* Textul și pictograma (pe două rânduri) */
     section[data-testid="stSidebar"] div[role="radiogroup"] label p {
         color: #94B0C2 !important;
-        font-size: 12px !important;
+        font-size: 13px !important;
         font-weight: 500 !important;
         line-height: 1.4 !important;
         white-space: pre-line !important;
@@ -74,20 +77,20 @@ st.markdown("""
         margin: 0 !important;
     }
 
-    /* Mărirea pictogramei de pe primul rând */
+    /* Mărirea pictogramei de deasupra textului */
     section[data-testid="stSidebar"] div[role="radiogroup"] label p::first-line {
-        font-size: 22px !important;
+        font-size: 24px !important;
     }
 
     /* Efect la trecerea mouse-ului (Hover) */
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-        background-color: rgba(255, 255, 255, 0.06) !important;
+        background-color: rgba(255, 255, 255, 0.08) !important;
     }
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover p {
         color: #FFFFFF !important;
     }
 
-    /* Elementul selectat (Activ) - Verde smarald ca în model */
+    /* Elementul selectat (Activ) - Verde smarald */
     section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
         background-color: #00B87C !important;
     }
@@ -96,16 +99,18 @@ st.markdown("""
         font-weight: 700 !important;
     }
 
-    /* Stilizare discretă pentru selectorul de utilizator din bara îngustă */
+    /* Selectorul de utilizator */
     section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
-        background-color: #13354D !important;
-        border-color: #1F4E6E !important;
-        color: #FFFFFF !important;
-        font-size: 11px !important;
+        background-color: #FFFFFF !important;
+        border-radius: 8px !important;
+        color: #0B2538 !important;
+        font-size: 13px !important;
+        font-weight: 600 !important;
     }
+
     section[data-testid="stSidebar"] hr {
-        border-color: rgba(255, 255, 255, 0.1) !important;
-        margin: 10px 0 !important;
+        border-color: rgba(255, 255, 255, 0.12) !important;
+        margin: 12px 0 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -393,10 +398,29 @@ def executa_interogare(numar, sursa):
     return None
 
 # --- BARA LATERALĂ & NAVIGARE ---
-try:
-    st.sidebar.image("220420_[1000xpx]_LOGO_AT.png", use_container_width=True)
-except Exception:
-    pass
+logo_gasit = None
+for ext in ["", ".png", ".jpg", ".jpeg", ".webp"]:
+    nume_fisier = f"220420_[1000xpx]_LOGO_AT{ext}"
+    if os.path.exists(nume_fisier):
+        logo_gasit = nume_fisier
+        break
+
+if logo_gasit:
+    with open(logo_gasit, "rb") as img_f:
+        b64_logo = base64.b64encode(img_f.read()).decode()
+    ext_mime = "png" if not logo_gasit.lower().endswith(("jpg", "jpeg")) else "jpeg"
+    st.sidebar.markdown(f"""
+        <div style="
+            background-color: #FFFFFF;
+            padding: 12px 14px;
+            border-radius: 10px;
+            text-align: center;
+            margin-bottom: 14px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+        ">
+            <img src="data:image/{ext_mime};base64,{b64_logo}" style="max-width: 100%; height: auto; display: block; margin: 0 auto;" />
+        </div>
+    """, unsafe_allow_html=True)
 
 conn = get_connection()
 cur = conn.cursor()
