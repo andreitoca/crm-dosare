@@ -405,21 +405,20 @@ useri_db = cur.fetchall()
 conn.close()
 
 user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Avocat Coordonator": 1}
-utilizator_selectat = st.sidebar.selectbox("👤 Utilizator conectat:", list(user_dict.keys()))
+utilizator_selectat = st.sidebar.selectbox("Utilizator", list(user_dict.keys()), label_visibility="collapsed")
 id_utilizator_curent = user_dict[utilizator_selectat]
 
 st.sidebar.markdown("---")
 modul_ales = st.sidebar.radio(
     "Navigare:",
     [
-        "📋 Portofoliu Dosare",
-        "👥 Clienți & Contracte (CAJ)",
-        "⏱️ Pontaj & Timesheet",
-        "📌 Sarcini de Lucru (Tasks)",
-        "🔍 Căutare Portal & Istoric"
+        "📁\nDosare",
+        "👤\nClienți",
+        "⏱️\nPontaj",
+        "☑️\nSarcini",
+        "🔍\nCăutare"
     ]
 )
-
 # === 1. PORTOFOLIU DOSARE ===
 if modul_ales == "📋 Portofoliu Dosare":
     st.markdown("""
