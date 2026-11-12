@@ -22,47 +22,49 @@ WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 import os
 import base64
 
-# --- STILIZARE MENIU LATERAL (ZONA SUS ALBĂ + MENIU ALBASTRU ROYAL CU ICONURI OUTLINE) ---
+# --- STILIZARE MENIU LATERAL (ZONA LOGO ALBĂ + TOT RESTUL BARĂ ALBASTRU ROYAL + ICONURI DISTINCTE) ---
 st.markdown("""
 <style>
-    /* Bara laterală rămâne albă pentru logo și utilizator */
+    /* Partea de sus (logo + utilizator) albă (primii ~175px), iar tot restul barei până jos Albastru Royal */
     section[data-testid="stSidebar"] {
-        background-color: #FFFFFF !important;
-        border-right: 1px solid #E2E8F0 !important;
-        min-width: 220px !important;
-        max-width: 240px !important;
+        background: linear-gradient(180deg, #FFFFFF 0px, #FFFFFF 175px, #1E3A8A 175px, #1E3A8A 100%) !important;
+        border-right: 1px solid #CBD5E1 !important;
+        min-width: 210px !important;
+        max-width: 230px !important;
     }
 
     section[data-testid="stSidebar"] > div:first-child {
-        padding: 18px 14px !important;
-        background-color: #FFFFFF !important;
+        padding: 16px 12px !important;
+        background: transparent !important;
     }
 
-    /* Ascunde eticheta "Navigare:" și cerculețul radio */
+    /* Ascunde eticheta "Navigare:" și cerculețul radio (inclusiv input-ul nativ) */
     section[data-testid="stSidebar"] div[data-testid="stWidgetLabel"],
     section[data-testid="stSidebar"] div[role="radiogroup"] label > div:first-child,
-    section[data-testid="stSidebar"] div[role="radiogroup"] [data-baseweb="radio"] > div:first-child {
+    section[data-testid="stSidebar"] div[role="radiogroup"] [data-baseweb="radio"] > div:first-child,
+    section[data-testid="stSidebar"] div[role="radiogroup"] input {
         display: none !important;
+        visibility: hidden !important;
         width: 0 !important;
         height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }
 
-    /* Doar zona meniului de navigare primește fundal Albastru Royal */
+    /* Containerul meniului pe zona albastră */
     section[data-testid="stSidebar"] div[role="radiogroup"] {
-        background-color: #1E3A8A !important;
-        padding: 10px 8px !important;
-        border-radius: 12px !important;
-        gap: 6px !important;
+        background-color: transparent !important;
+        margin-top: 18px !important;
+        gap: 8px !important;
         width: 100% !important;
-        box-shadow: 0 4px 12px rgba(30, 58, 138, 0.15) !important;
     }
 
-    /* Elementele de meniu pe fundalul Albastru Royal */
+    /* Elementele de meniu */
     section[data-testid="stSidebar"] div[role="radiogroup"] label {
         background-color: transparent !important;
         border: none !important;
-        border-radius: 8px !important;
-        padding: 12px 8px !important;
+        border-radius: 10px !important;
+        padding: 14px 8px !important;
         width: 100% !important;
         display: flex !important;
         flex-direction: column !important;
@@ -73,7 +75,7 @@ st.markdown("""
         transition: all 0.2s ease !important;
     }
 
-    /* Icon-ul vectorial minimalist (outline alb) generat înaintea textului */
+    /* Baza comună pentru pictogramele vectoriale minimaliste */
     section[data-testid="stSidebar"] div[role="radiogroup"] label::before {
         content: "" !important;
         display: block !important;
@@ -83,37 +85,42 @@ st.markdown("""
         background-repeat: no-repeat !important;
         background-position: center !important;
         background-size: contain !important;
-        opacity: 0.78 !important;
+        opacity: 0.85 !important;
     }
 
-    /* 1. Icon Dosare (Portofoliu) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(1)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Cpath d='M8 7v10M12 7v7M16 7v4'/%3E%3C/svg%3E") !important;
+    /* 1. Icon DOSARE (Folder / Dosar juridic) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Dosare"])::before,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(1)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z'/%3E%3Cpath d='M8 13h8'/%3E%3C/svg%3E") !important;
     }
 
-    /* 2. Icon Clienți (exact ca în model) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(2)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Ccircle cx='12' cy='10' r='3'/%3E%3Cpath d='M7 18c1.2-2.2 3.1-3.2 5-3.2s3.8 1 5 3.2'/%3E%3C/svg%3E") !important;
+    /* 2. Icon CLIENȚI (Persoană în chenar rotunjit) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Clienți"])::before,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(2)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Ccircle cx='12' cy='10' r='3'/%3E%3Cpath d='M7 18c1.2-2.2 3.1-3.2 5-3.2s3.8 1 5 3.2'/%3E%3C/svg%3E") !important;
     }
 
-    /* 3. Icon Pontaj (Activități / Calendar cu bifă ca în model) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(3)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='17' rx='4'/%3E%3Cpath d='M8 2v3M16 2v3M9 13l2 2 4-4'/%3E%3C/svg%3E") !important;
+    /* 3. Icon PONTAJ (Ceas / Cronometru minimalist) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Pontaj"])::before,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(3)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='13' r='8'/%3E%3Cpath d='M12 9v4l2.5 2.5M9 2h6M12 2v3'/%3E%3C/svg%3E") !important;
     }
 
-    /* 4. Icon Sarcini (Pachet / Dosar lucru ca în model) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(4)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Cpath d='M9 3v5l3-1.5L15 8V3M9 15h6'/%3E%3C/svg%3E") !important;
+    /* 4. Icon SARCINI (Calendar cu bifă) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Sarcini"])::before,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(4)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='4' width='18' height='17' rx='4'/%3E%3Cpath d='M8 2v3M16 2v3M9 13l2 2 4-4'/%3E%3C/svg%3E") !important;
     }
 
-    /* 5. Icon Căutare / Statistici (exact ca în model) */
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:nth-of-type(5)::before {
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='3' y='3' width='18' height='18' rx='4'/%3E%3Cpath d='M8 16v-2M12 16v-4M16 16v-6M7 11c3 0 6-2 9-5'/%3E%3C/svg%3E") !important;
+    /* 5. Icon CĂUTARE (Lupă minimalistă) */
+    section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input[aria-label="Căutare"])::before,
+    section[data-testid="stSidebar"] div[role="radiogroup"] label[data-baseweb="radio"]:nth-child(5)::before {
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23FFFFFF' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='M20 20l-3.5-3.5'/%3E%3C/svg%3E") !important;
     }
 
     /* Textul din meniu */
     section[data-testid="stSidebar"] div[role="radiogroup"] label p {
-        color: #CBD5E1 !important;
+        color: #E2E8F0 !important;
         font-size: 13px !important;
         font-weight: 500 !important;
         line-height: 1.2 !important;
@@ -123,7 +130,7 @@ st.markdown("""
 
     /* Efect Hover */
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-        background-color: rgba(255, 255, 255, 0.1) !important;
+        background-color: rgba(255, 255, 255, 0.12) !important;
     }
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover p,
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover::before {
@@ -468,7 +475,6 @@ user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Avocat Coo
 utilizator_selectat = st.sidebar.selectbox("Utilizator", list(user_dict.keys()), label_visibility="collapsed")
 id_utilizator_curent = user_dict[utilizator_selectat]
 
-st.sidebar.markdown("---")
 modul_ales = st.sidebar.radio(
     "Navigare:",
     [
