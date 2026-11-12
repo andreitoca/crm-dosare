@@ -22,19 +22,20 @@ WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 import os
 import base64
 
-# --- STILIZARE MENIU LATERAL ---
+# --- STILIZARE MENIU LATERAL (FUNDAL ALB CURAT) ---
 st.markdown("""
 <style>
-    /* Fundalul și lățimea mărită a barei laterale */
+    /* Fundalul complet alb al barei laterale */
     section[data-testid="stSidebar"] {
-        background-color: #0B2538 !important;
+        background-color: #FFFFFF !important;
+        border-right: 1px solid #E2E8F0 !important;
         min-width: 220px !important;
         max-width: 240px !important;
     }
 
     section[data-testid="stSidebar"] > div:first-child {
         padding: 18px 14px !important;
-        background-color: #0B2538 !important;
+        background-color: #FFFFFF !important;
     }
 
     /* Ascunde eticheta "Navigare:" și cerculețul radio */
@@ -50,10 +51,10 @@ st.markdown("""
         width: 100% !important;
     }
 
-    /* Aspectul fiecărui element de meniu (inactiv) */
+    /* Aspectul fiecărui element de meniu (inactiv - pe fundal alb) */
     section[data-testid="stSidebar"] div[role="radiogroup"] label {
-        background-color: transparent !important;
-        border: none !important;
+        background-color: #F8FAFC !important;
+        border: 1px solid #E2E8F0 !important;
         border-radius: 8px !important;
         padding: 12px 8px !important;
         width: 100% !important;
@@ -63,14 +64,14 @@ st.markdown("""
         justify-content: center !important;
         text-align: center !important;
         cursor: pointer !important;
-        transition: background-color 0.2s ease !important;
+        transition: all 0.2s ease !important;
     }
 
-    /* Textul și pictograma (pe două rânduri) */
+    /* Textul și pictograma (închise la culoare pentru contrast pe alb) */
     section[data-testid="stSidebar"] div[role="radiogroup"] label p {
-        color: #94B0C2 !important;
+        color: #1E3A8A !important;
         font-size: 13px !important;
-        font-weight: 500 !important;
+        font-weight: 600 !important;
         line-height: 1.4 !important;
         white-space: pre-line !important;
         text-align: center !important;
@@ -84,15 +85,14 @@ st.markdown("""
 
     /* Efect la trecerea mouse-ului (Hover) */
     section[data-testid="stSidebar"] div[role="radiogroup"] label:hover {
-        background-color: rgba(255, 255, 255, 0.08) !important;
-    }
-    section[data-testid="stSidebar"] div[role="radiogroup"] label:hover p {
-        color: #FFFFFF !important;
+        background-color: #EFF6FF !important;
+        border-color: #93C5FD !important;
     }
 
-    /* Elementul selectat (Activ) - Verde smarald */
+    /* Elementul selectat (Activ) - Verde smarald ca în model */
     section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) {
         background-color: #00B87C !important;
+        border-color: #00B87C !important;
     }
     section[data-testid="stSidebar"] div[role="radiogroup"] label:has(input:checked) p {
         color: #FFFFFF !important;
@@ -101,15 +101,16 @@ st.markdown("""
 
     /* Selectorul de utilizator */
     section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
-        background-color: #FFFFFF !important;
+        background-color: #F8FAFC !important;
+        border: 1px solid #CBD5E1 !important;
         border-radius: 8px !important;
-        color: #0B2538 !important;
+        color: #0F172A !important;
         font-size: 13px !important;
         font-weight: 600 !important;
     }
 
     section[data-testid="stSidebar"] hr {
-        border-color: rgba(255, 255, 255, 0.12) !important;
+        border-color: #E2E8F0 !important;
         margin: 12px 0 !important;
     }
 </style>
@@ -412,11 +413,9 @@ if logo_gasit:
     st.sidebar.markdown(f"""
         <div style="
             background-color: #FFFFFF;
-            padding: 12px 14px;
-            border-radius: 10px;
+            padding: 8px 6px;
             text-align: center;
-            margin-bottom: 14px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+            margin-bottom: 12px;
         ">
             <img src="data:image/{ext_mime};base64,{b64_logo}" style="max-width: 100%; height: auto; display: block; margin: 0 auto;" />
         </div>
