@@ -147,32 +147,55 @@ st.markdown("""
         font-size: 13px !important;
     }
 
-    /* Aliniere perfectă pe rând a textului și butoanelor ✏️ și 🗑️ în tabelele Clienți și Contracte CAJ */
+    /* Aliniere la milimetru pe rând a textului și iconițelor compacte ✏️ și 🗑️ în tabelele Clienți și Contracte CAJ */
     div[data-testid="stHorizontalBlock"]:has(.row-action-marker) {
         align-items: center !important;
+        min-height: 28px !important;
     }
-    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) > div[data-testid="stColumn"] {
-        display: flex !important;
-        flex-direction: column !important;
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) > div[data-testid="stColumn"],
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div[data-testid="stVerticalBlock"] {
+        gap: 0 !important;
+        padding-top: 0 !important;
+        padding-bottom: 0 !important;
         justify-content: center !important;
     }
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div[data-testid="stElementContainer"] {
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div[data-testid="stMarkdownContainer"],
     div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div[data-testid="stMarkdownContainer"] p {
         margin: 0 !important;
         padding: 0 !important;
-        line-height: 1.3 !important;
+        line-height: 26px !important;
     }
     div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div.stButton {
         margin: 0 !important;
+        padding: 0 !important;
+        line-height: 26px !important;
     }
-    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div.stButton > button {
-        height: 32px !important;
-        min-height: 32px !important;
-        padding: 0 8px !important;
-        border-radius: 8px !important;
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div.stButton > button,
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) button[data-testid="stBaseButton-secondary"] {
+        height: 26px !important;
+        min-height: 26px !important;
+        max-height: 26px !important;
+        width: 28px !important;
+        min-width: 28px !important;
+        padding: 0 !important;
+        font-size: 13px !important;
+        line-height: 1 !important;
+        border-radius: 6px !important;
+        border: 1px solid #E2E8F0 !important;
+        background-color: #FFFFFF !important;
         margin: 0 !important;
         display: inline-flex !important;
         align-items: center !important;
         justify-content: center !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div.stButton > button:hover,
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) button[data-testid="stBaseButton-secondary"]:hover {
+        border-color: #D4AF37 !important;
+        background-color: #FFFDF5 !important;
     }
 
     div[data-testid="stVerticalBlockBorderWrapper"]:has(.manual-gold-marker) details {
@@ -1591,7 +1614,7 @@ elif modul_ales == "Clienți":
                 h_cl_cols = st.columns(cl_widths)
                 for col_h, txt_h in zip(h_cl_cols, cl_headers):
                     col_h.markdown(
-                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{txt_h if txt_h else '&nbsp;'}</div>",
+                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{txt_h}</div>" if txt_h else "<div style='height:24px;'></div>",
                         unsafe_allow_html=True
                     )
 
@@ -1609,7 +1632,7 @@ elif modul_ales == "Clienți":
                     ]
                     for col_r, val_r in zip(r_cl_cols[:-2], vals_cl):
                         col_r.markdown(
-                            f"<div style='font-size:13px; color:#0F172A; display:flex; align-items:center; min-height:32px; line-height:1.3;'>{val_r}</div>",
+                            f"<div style='font-size:13px; color:#0F172A; display:flex; align-items:center; min-height:26px; height:26px; line-height:26px;'>{val_r}</div>",
                             unsafe_allow_html=True
                         )
 
@@ -1895,7 +1918,7 @@ elif modul_ales == "Clienți":
                 h_cols = st.columns(widths)
                 for col_h, text_h in zip(h_cols, headers):
                     col_h.markdown(
-                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{text_h if text_h else '&nbsp;'}</div>",
+                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{text_h}</div>" if text_h else "<div style='height:24px;'></div>",
                         unsafe_allow_html=True
                     )
 
@@ -1950,7 +1973,7 @@ elif modul_ales == "Clienți":
                     ]
                     for col_r, val_r in zip(r_cols[:-2], valori_rand):
                         col_r.markdown(
-                            f"<div style='font-size:13px; color:#0F172A; display:flex; align-items:center; min-height:32px; line-height:1.3;'>{val_r}</div>",
+                            f"<div style='font-size:13px; color:#0F172A; display:flex; align-items:center; min-height:26px; height:26px; line-height:26px;'>{val_r}</div>",
                             unsafe_allow_html=True
                         )
 
