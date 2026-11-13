@@ -111,11 +111,13 @@ st.markdown("""
         background-image: var(--icon-cautare) !important;
     }
 
-    /* Chenar auriu pronunțat și vizibil pentru Cronometrul Live & Pontajul Manual */
+    /* Chenar auriu pronunțat și vizibil pentru toate blocurile marcate cu aur (Pontaj, Clienți, Contracte, AA) */
     div[data-testid="stVerticalBlockBorderWrapper"]:has(.timer-gold-marker),
     div[data-testid="stVerticalBlockBorderWrapper"]:has(.manual-gold-marker),
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.gold-box-marker),
     div[data-testid="stVerticalBlock"]:has(.timer-gold-marker):not(:has(section[data-testid="stSidebar"])),
-    div[data-testid="stVerticalBlock"]:has(.manual-gold-marker):not(:has(section[data-testid="stSidebar"])) {
+    div[data-testid="stVerticalBlock"]:has(.manual-gold-marker):not(:has(section[data-testid="stSidebar"])),
+    div[data-testid="stVerticalBlock"]:has(.gold-box-marker):not(:has(section[data-testid="stSidebar"])) {
         border: 2.5px solid #D4AF37 !important;
         border-radius: 12px !important;
         background: linear-gradient(180deg, #FFFDF5 0%, #FFFFFF 100%) !important;
@@ -126,12 +128,39 @@ st.markdown("""
 
     /* Eliminăm dublarea bordurii pe containerele interioare */
     div[data-testid="stVerticalBlockBorderWrapper"]:has(.timer-gold-marker) div[data-testid="stVerticalBlock"],
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(.manual-gold-marker) div[data-testid="stVerticalBlock"] {
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.manual-gold-marker) div[data-testid="stVerticalBlock"],
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.gold-box-marker) div[data-testid="stVerticalBlock"] {
         border: none !important;
         box-shadow: none !important;
         background: transparent !important;
         padding: 0 !important;
         margin: 0 !important;
+    }
+
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.gold-box-marker) details {
+        border: none !important;
+        background-color: transparent !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.gold-box-marker) summary {
+        font-weight: 700 !important;
+        color: #1E3A8A !important;
+        font-size: 13px !important;
+    }
+
+    /* Aliniere perfectă pe rând a butoanelor ✏️ și 🗑️ în tabelele Clienți și Contracte CAJ */
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) {
+        align-items: center !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div.stButton > button {
+        height: 34px !important;
+        min-height: 34px !important;
+        padding: 0 8px !important;
+        border-radius: 8px !important;
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
     }
 
     div[data-testid="stVerticalBlockBorderWrapper"]:has(.manual-gold-marker) details {
@@ -186,7 +215,9 @@ st.markdown("""
     div.stElementContainer:has(.btn-stop-marker),
     div.stElementContainer:has(.btn-resume-marker),
     div.stElementContainer:has(.timer-gold-marker),
-    div.stElementContainer:has(.manual-gold-marker) {
+    div.stElementContainer:has(.manual-gold-marker),
+    div.stElementContainer:has(.gold-box-marker),
+    div.stElementContainer:has(.row-action-marker) {
         display: none !important;
         height: 0 !important;
         margin: 0 !important;
@@ -366,6 +397,20 @@ def asigura_structura_db_o_data():
                 pass
 
         cur.execute("""
+            CREATE TABLE IF NOT EXISTS acte_aditionale (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                contract_id INT NOT NULL,
+                numar_aa VARCHAR(100) NOT NULL,
+                data_aa DATE,
+                sectiuni_modificate VARCHAR(255) DEFAULT '',
+                modificare_onorariu TEXT,
+                modificare_obiect TEXT,
+                alte_modificari TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS sarcini (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 titlu VARCHAR(255),
@@ -440,6 +485,34 @@ def get_dosare_cached():
     rows = cur.fetchall()
     conn.close()
     return rows
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_acte_aditionale_cached():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                aa.id,
+                aa.contract_id,
+                k.serie_numar AS contract_serie,
+                c.denumire AS client_nume,
+                aa.numar_aa,
+                aa.data_aa,
+                aa.sectiuni_modificate,
+                aa.modificare_onorariu,
+                aa.modificare_obiect,
+                aa.alte_modificari
+            FROM acte_aditionale aa
+            JOIN contracte k ON aa.contract_id = k.id
+            JOIN clienti c ON k.client_id = c.id
+            ORDER BY aa.data_aa DESC, aa.id DESC
+        """)
+        rows = cur.fetchall()
+        conn.close()
+        return rows
+    except Exception:
+        return []
 
 @st.cache_data(ttl=60, show_spinner=False)
 def get_contracte_cached(an_crt, luna_crt):
@@ -535,6 +608,7 @@ def goleste_cache_date():
     get_clienti_cached.clear()
     get_dosare_cached.clear()
     get_contracte_cached.clear()
+    get_acte_aditionale_cached.clear()
     get_pontaj_detaliat_cached.clear()
     get_sarcini_cached.clear()
 
@@ -1384,129 +1458,398 @@ elif modul_ales == "Clienți":
 
     tab_cl, tab_caj = st.tabs(["🏢 Bază de Date Clienți", "📄 Contracte de Asistență (CAJ)"])
 
+    # ---------------------------------------------------------
+    # TAB 1: BAZĂ DE DATE CLIENȚI
+    # ---------------------------------------------------------
     with tab_cl:
-        with st.expander("➕ Adaugă Client Nou", expanded=False):
-            with st.form("form_add_client", clear_on_submit=True):
-                c1, c2, c3 = st.columns([2, 1, 1])
-                den = c1.text_input("Denumire Client / Nume Complet *")
-                tip_c = c2.selectbox("Tip", ["PJ (Companie)", "PF (Persoană Fizică)"])
-                cui = c3.text_input("CUI / CNP")
+        with st.container(border=True):
+            st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
+            with st.expander("➕ Adaugă Client Nou", expanded=False):
+                with st.form("form_add_client", clear_on_submit=True):
+                    c1, c2, c3 = st.columns([2, 1, 1])
+                    den = c1.text_input("Denumire Client / Nume Complet *")
+                    tip_c = c2.selectbox("Tip", ["PJ (Companie)", "PF (Persoană Fizică)"])
+                    cui = c3.text_input("CUI / CNP")
 
-                c4, c5, c6 = st.columns([1.5, 1, 1.5])
-                rep = c4.text_input("Reprezentant Legal / Contact")
-                tel = c5.text_input("Telefon")
-                em = c6.text_input("Email")
+                    c4, c5, c6 = st.columns([1.5, 1, 1.5])
+                    rep = c4.text_input("Reprezentant Legal / Contact")
+                    tel = c5.text_input("Telefon")
+                    em = c6.text_input("Email")
 
-                adr = st.text_input("Adresă / Sediu Social")
+                    adr = st.text_input("Adresă / Sediu Social")
 
-                if st.form_submit_button("Salvează Clientul") and den:
+                    if st.form_submit_button("💾 Salvează Clientul", type="primary") and den:
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        cur.execute("""
+                            INSERT INTO clienti (denumire, tip_client, cui_cnp, adresa, reprezentant, telefon, email)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """, (den.strip(), tip_c, cui.strip(), adr.strip(), rep.strip(), tel.strip(), em.strip()))
+                        conn.commit()
+                        conn.close()
+                        goleste_cache_date()
+                        st.success(f"Clientul '{den.strip()}' a fost adăugat!")
+                        st.rerun()
+
+        # Pop-up Modificare Date Client (cu mesaj de atenționare)
+        @st.dialog("✏️ Modificare Date Client")
+        def dialog_modifica_client(cl_row):
+            st.warning(f"⚠️ Atenție: Modificarea datelor clientului **{cl_row['denumire']}** va actualiza automat informațiile în toate contractele, dosarele și pontajele asociate acestuia.")
+            with st.form(f"form_edit_client_{cl_row['id']}"):
+                ec1, ec2 = st.columns([2, 1])
+                den_nou = ec1.text_input("Denumire Client *", value=cl_row["denumire"] or "")
+                tip_opt = ["PJ (Companie)", "PF (Persoană Fizică)"]
+                idx_tip = tip_opt.index(cl_row["tip_client"]) if cl_row.get("tip_client") in tip_opt else 0
+                tip_nou = ec2.selectbox("Tip", tip_opt, index=idx_tip)
+
+                ec3, ec4 = st.columns(2)
+                cui_nou = ec3.text_input("CUI / CNP", value=cl_row["cui_cnp"] or "")
+                rep_nou = ec4.text_input("Reprezentant Legal / Contact", value=cl_row["reprezentant"] or "")
+
+                ec5, ec6 = st.columns(2)
+                tel_nou = ec5.text_input("Telefon", value=cl_row["telefon"] or "")
+                em_nou = ec6.text_input("Email", value=cl_row["email"] or "")
+
+                adr_nou = st.text_input("Adresă / Sediu Social", value=cl_row["adresa"] or "")
+
+                col_s1, col_s2 = st.columns(2)
+                salveaza_cl = col_s1.form_submit_button("✅ Confirmă și Salvează", type="primary", use_container_width=True)
+                anuleaza_cl = col_s2.form_submit_button("❌ Anulează", use_container_width=True)
+
+                if salveaza_cl and den_nou.strip():
                     conn = get_connection()
                     cur = conn.cursor()
-                    cur.execute("""
-                        INSERT INTO clienti (denumire, tip_client, cui_cnp, adresa, reprezentant, telefon, email)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (den, tip_c, cui, adr, rep, tel, em))
-                    conn.commit()
+                    try:
+                        cur.execute("""
+                            UPDATE clienti
+                            SET denumire = %s, tip_client = %s, cui_cnp = %s,
+                                reprezentant = %s, telefon = %s, email = %s, adresa = %s
+                            WHERE id = %s
+                        """, (
+                            den_nou.strip(), tip_nou, cui_nou.strip(),
+                            rep_nou.strip(), tel_nou.strip(), em_nou.strip(), adr_nou.strip(),
+                            cl_row["id"]
+                        ))
+                        conn.commit()
+                        goleste_cache_date()
+                    except Exception as e:
+                        st.error(f"Eroare la actualizare: {e}")
                     conn.close()
-                    goleste_cache_date()
-                    st.success(f"Clientul '{den}' a fost adăugat!")
                     st.rerun()
+                if anuleaza_cl:
+                    st.rerun()
+
+        # Pop-up Ștergere Client (cu mesaj de atenționare)
+        @st.dialog("⚠️ Atenționare: Ștergere Client")
+        def dialog_sterge_client(cl_row):
+            st.error(
+                f"🚨 Atenție! Ești pe cale să ștergi definitiv clientul **{cl_row['denumire']}**.\n\n"
+                "Această acțiune va șterge permanent și **toate contractele (CAJ), actele adiționale, pontajele și sarcinile** asociate acestui client, iar dosarele îi vor fi deconectate!"
+            )
+            col_da, col_nu = st.columns(2)
+            if col_da.button("✅ Da, șterge definitiv", type="primary", use_container_width=True):
+                c_id_del = cl_row["id"]
+                conn = get_connection()
+                cur = conn.cursor()
+                try:
+                    cur.execute("UPDATE dosare SET client_id = NULL WHERE client_id = %s", (c_id_del,))
+                    cur.execute("DELETE FROM pontaj WHERE client_id = %s", (c_id_del,))
+                    cur.execute("DELETE FROM sarcini WHERE client_id = %s", (c_id_del,))
+                    cur.execute("DELETE FROM acte_aditionale WHERE contract_id IN (SELECT id FROM contracte WHERE client_id = %s)", (c_id_del,))
+                    cur.execute("DELETE FROM contracte WHERE client_id = %s", (c_id_del,))
+                    cur.execute("DELETE FROM clienti WHERE id = %s", (c_id_del,))
+                    conn.commit()
+                    goleste_cache_date()
+                except Exception as e:
+                    st.error(f"Eroare la ștergere: {e}")
+                conn.close()
+                st.rerun()
+            if col_nu.button("❌ Nu, păstrează clientul", use_container_width=True):
+                st.rerun()
 
         clienti_raw = get_clienti_cached()
 
         if clienti_raw:
-            clienti_df = [
-                {
-                    "ID": c["id"],
-                    "Denumire Client": c["denumire"],
-                    "Tip": c["tip_client"],
-                    "CUI/CNP": c["cui_cnp"],
-                    "Contact": c["reprezentant"],
-                    "Telefon": c["telefon"],
-                    "Email": c["email"],
-                    "Adresă": c["adresa"],
-                }
-                for c in clienti_raw
-            ]
-            st.dataframe(pd.DataFrame(clienti_df), use_container_width=True, hide_index=True)
-            with st.expander("🗑️ Șterge un client din baza de date"):
-                opt_del_c = [f"{c['ID']} - {c['Denumire Client']}" for c in clienti_df]
-                cl_de_sters = st.selectbox("Selectează clientul pe care dorești să-l ștergi:", opt_del_c)
-                st.warning("Atenție: Ștergerea clientului va elimina și contractele/pontajele asociate acestuia, iar dosarele îi vor fi deconectate.")
-                if st.button("Confirmă Ștergerea Clientului", type="secondary"):
-                    c_id_del = int(cl_de_sters.split(" - ")[0])
-                    conn = get_connection()
-                    cur = conn.cursor()
-                    try:
-                        cur.execute("UPDATE dosare SET client_id = NULL WHERE client_id = %s", (c_id_del,))
-                        cur.execute("DELETE FROM pontaj WHERE client_id = %s", (c_id_del,))
-                        cur.execute("DELETE FROM sarcini WHERE client_id = %s", (c_id_del,))
-                        cur.execute("DELETE FROM contracte WHERE client_id = %s", (c_id_del,))
-                        cur.execute("DELETE FROM clienti WHERE id = %s", (c_id_del,))
-                        conn.commit()
-                        goleste_cache_date()
-                        st.success(f"Clientul '{cl_de_sters}' a fost șters!")
-                    except Exception as e:
-                        st.error(f"Eroare la ștergere: {e}")
-                    conn.close()
-                    st.rerun()
-        else:
-            st.info("Niciun client înregistrat momentan.")
+            with st.container(border=True):
+                st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
+                st.markdown("#### 🏢 Registru Clienți")
 
+                cl_widths = [0.45, 1.7, 1.0, 1.0, 1.2, 1.0, 1.4, 1.8, 0.45, 0.45]
+                cl_headers = ["Nr.", "Denumire Client", "Tip", "CUI / CNP", "Contact", "Telefon", "Email", "Adresă", "", ""]
+                h_cl_cols = st.columns(cl_widths)
+                for col_h, txt_h in zip(h_cl_cols, cl_headers):
+                    col_h.markdown(
+                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{txt_h}</div>",
+                        unsafe_allow_html=True
+                    )
+
+                for idx_c, c in enumerate(clienti_raw, start=1):
+                    r_cl_cols = st.columns(cl_widths)
+                    vals_cl = [
+                        str(idx_c),
+                        c["denumire"] or "-",
+                        c["tip_client"] or "-",
+                        c["cui_cnp"] or "-",
+                        c["reprezentant"] or "-",
+                        c["telefon"] or "-",
+                        c["email"] or "-",
+                        c["adresa"] or "-"
+                    ]
+                    for col_r, val_r in zip(r_cl_cols[:-2], vals_cl):
+                        col_r.markdown(
+                            f"<div style='font-size:13px; color:#0F172A; padding-top:4px;'>{val_r}</div>",
+                            unsafe_allow_html=True
+                        )
+
+                    with r_cl_cols[-2]:
+                        st.markdown("<span class='row-action-marker' style='display:none;'></span>", unsafe_allow_html=True)
+                        if st.button("✏️", key=f"ed_cl_row_{c['id']}", help=f"Modifică datele clientului {c['denumire']}"):
+                            dialog_modifica_client(c)
+
+                    with r_cl_cols[-1]:
+                        st.markdown("<span class='row-action-marker' style='display:none;'></span>", unsafe_allow_html=True)
+                        if st.button("🗑️", key=f"del_cl_row_{c['id']}", help=f"Șterge clientul {c['denumire']}"):
+                            dialog_sterge_client(c)
+
+                    st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
+        else:
+            st.info("Niciun client înregistrat momentan. Folosește formularul de mai sus pentru a adăuga primul client.")
+
+    # ---------------------------------------------------------
+    # TAB 2: CONTRACTE DE ASISTENȚĂ JURIDICĂ (CAJ) + ACTE ADIȚIONALE (AA)
+    # ---------------------------------------------------------
     with tab_caj:
         c_list = get_clienti_cached()
         c_dict = {c['denumire']: c['id'] for c in c_list} if c_list else {}
 
-        with st.expander("➕ Înregistrează Contract Nou (CAJ)", expanded=False):
-            if not c_dict:
-                st.warning("Adaugă mai întâi un client în tab-ul 'Bază de Date Clienți'.")
-            else:
-                with st.form("form_add_caj", clear_on_submit=True):
-                    c1, c2, c3 = st.columns(3)
-                    serie_nr = c1.text_input("Serie și Număr CAJ * (ex: TL/2026/01)")
-                    dt_c = c2.date_input("Data Încheierii", value=date.today())
-                    client_caj = c3.selectbox("Client", list(c_dict.keys()))
+        with st.container(border=True):
+            st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
+            with st.expander("➕ Înregistrează Contract Nou (CAJ)", expanded=False):
+                if not c_dict:
+                    st.warning("Adaugă mai întâi un client în tab-ul 'Bază de Date Clienți'.")
+                else:
+                    with st.form("form_add_caj", clear_on_submit=True):
+                        c1, c2, c3 = st.columns(3)
+                        serie_nr = c1.text_input("Serie și Număr CAJ * (ex: Seria B nr. 596874)")
+                        dt_c = c2.date_input("Data Încheierii", value=date.today())
+                        client_caj = c3.selectbox("Client", list(c_dict.keys()))
 
-                    c4, c5, c6, c7, c8 = st.columns([1.2, 1, 1, 1, 0.8])
-                    tip_onor = c4.selectbox("Tip Onorariu", ["Abonament", "Orar", "Fix", "Succes"])
-                    val_onor = c5.number_input("Tarif Orar / Valoare", min_value=0.0, step=10.0)
-                    nr_ore_abon = c6.number_input("Număr ore (Abonament)", min_value=0.0, step=1.0, value=0.0)
-                    tarif_dep = c7.number_input("Tarif depășire / h", min_value=0.0, step=10.0, value=0.0)
-                    moneda = c8.selectbox("Monedă", ["EUR", "RON"])
+                        c4, c5, c6, c7, c8 = st.columns([1.2, 1, 1, 1, 0.8])
+                        tip_onor = c4.selectbox("Tip Onorariu", ["Abonament", "Orar", "Fix", "Succes"])
+                        val_onor = c5.number_input("Tarif Orar / Valoare", min_value=0.0, step=10.0)
+                        nr_ore_abon = c6.number_input("Număr ore (Abonament)", min_value=0.0, step=1.0, value=0.0)
+                        tarif_dep = c7.number_input("Tarif depășire / h", min_value=0.0, step=10.0, value=0.0)
+                        moneda = c8.selectbox("Monedă", ["EUR", "RON"])
 
-                    obiect_caj = st.text_area("Obiectul asistenței juridice")
+                        obiect_caj = st.text_area("Obiectul asistenței juridice")
 
-                    if st.form_submit_button("Înregistrează Contractul") and serie_nr:
+                        if st.form_submit_button("💾 Înregistrează Contractul", type="primary") and serie_nr:
+                            conn = get_connection()
+                            cur = conn.cursor()
+                            try:
+                                cur.execute("""
+                                    INSERT INTO contracte (
+                                        serie_numar, data_contract, client_id, obiect_contract,
+                                        tip_onorariu, valoare_onorariu, tarif_depasire, moneda, numar_ore, status
+                                    )
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'Activ')
+                                """, (
+                                    serie_nr.strip(), dt_c, c_dict[client_caj], obiect_caj,
+                                    tip_onor, val_onor, tarif_dep, moneda, nr_ore_abon
+                                ))
+                                conn.commit()
+                                goleste_cache_date()
+                                st.success(f"Contractul {serie_nr.strip()} a fost salvat!")
+                            except Exception as e:
+                                st.error(f"Eroare la salvare: {e}")
+                            conn.close()
+                            st.rerun()
+
+        # Pop-up Modificare Contract + Opțiune Modificare prin Act Adițional (AA)
+        @st.dialog("✏️ Modificare Contract / Act Adițional (AA)")
+        def dialog_modifica_contract_sau_aa(caj_row):
+            st.info(f"Contract selectat: **{caj_row['serie_numar']}** • Client: **{caj_row['client_nume']}** • Data: **{caj_row['data_contract']}**")
+
+            mod_prin_aa = st.checkbox(
+                "📜 Modifică prin Act Adițional (AA)",
+                value=True,
+                key=f"chk_aa_{caj_row['id']}"
+            )
+
+            if mod_prin_aa:
+                st.markdown("""
+                    <div style="background:#FFFDF5; border:1.5px solid #D4AF37; border-radius:8px; padding:10px 14px; margin-bottom:10px;">
+                        <strong style="color:#1E3A8A;">📜 Detalii Act Adițional (AA)</strong><br/>
+                        <span style="font-size:12px; color:#475569;">Selectează secțiunile modificate prin Act Adițional. Modificările vor fi salvate în registrul AA și aplicate contractului.</span>
+                    </div>
+                """, unsafe_allow_html=True)
+
+                aa_c1, aa_c2 = st.columns([1.3, 1])
+                nr_aa = aa_c1.text_input("Număr / Serie Act Adițional *", placeholder="ex: AA nr. 1 / 2026", key=f"nr_aa_{caj_row['id']}")
+                dt_aa = aa_c2.date_input("Data Actului Adițional", value=date.today(), key=f"dt_aa_{caj_row['id']}")
+
+                st.markdown("**Secțiuni ale contractului modificate prin AA:**")
+                sc1, sc2, sc3 = st.columns(3)
+                bifa_onorariu = sc1.checkbox("💶 Onorariu / Tarife", value=True, key=f"aa_sec_onor_{caj_row['id']}")
+                bifa_obiect = sc2.checkbox("📋 Obiectul contractului", value=False, key=f"aa_sec_ob_{caj_row['id']}")
+                bifa_alte = sc3.checkbox("📌 Durată / Alte clauze", value=False, key=f"aa_sec_alte_{caj_row['id']}")
+
+                tip_opt = ["Abonament", "Orar", "Fix", "Succes"]
+                idx_t = tip_opt.index(caj_row["tip_onorariu"]) if caj_row.get("tip_onorariu") in tip_opt else 0
+                mon_opt = ["EUR", "RON"]
+                idx_m = mon_opt.index(caj_row["moneda"]) if caj_row.get("moneda") in mon_opt else 0
+
+                tip_nou = caj_row["tip_onorariu"]
+                val_noua = float(caj_row["valoare_onorariu"] or 0)
+                ore_noi = float(caj_row["numar_ore"] or 0)
+                dep_nou = float(caj_row["tarif_depasire"] or 0)
+                mon_noua = caj_row["moneda"] or "EUR"
+                desc_mod_onor = ""
+
+                if bifa_onorariu:
+                    st.markdown("---")
+                    st.markdown("**1. Modificare Onorariu prin AA:**")
+                    oc1, oc2, oc3 = st.columns(3)
+                    tip_nou = oc1.selectbox("Tip Onorariu Nou", tip_opt, index=idx_t, key=f"aa_tip_{caj_row['id']}")
+                    val_noua = oc2.number_input("Valoare / Tarif Nou", min_value=0.0, step=10.0, value=val_noua, key=f"aa_val_{caj_row['id']}")
+                    mon_noua = oc3.selectbox("Monedă", mon_opt, index=idx_m, key=f"aa_mon_{caj_row['id']}")
+
+                    oc4, oc5 = st.columns(2)
+                    ore_noi = oc4.number_input("Ore incluse / lună", min_value=0.0, step=1.0, value=ore_noi, key=f"aa_ore_{caj_row['id']}")
+                    dep_nou = oc5.number_input("Tarif depășire / h", min_value=0.0, step=10.0, value=dep_nou, key=f"aa_dep_{caj_row['id']}")
+                    desc_mod_onor = st.text_input(
+                        "Descriere clauză onorariu AA",
+                        value=f"Onorariu {tip_nou}: {val_noua:.2f} {mon_noua}" + (f" ({ore_noi:.1f}h incl., depășire {dep_nou:.2f} {mon_noua}/h)" if tip_nou == "Abonament" else ""),
+                        key=f"aa_desc_onor_{caj_row['id']}"
+                    )
+
+                obiect_nou = caj_row.get("obiect_contract") or ""
+                desc_mod_obiect = ""
+                if bifa_obiect:
+                    st.markdown("---")
+                    st.markdown("**2. Modificare / Extindere Obiect prin AA:**")
+                    obiect_nou = st.text_area("Obiectul actualizat al contractului", value=obiect_nou, key=f"aa_ob_{caj_row['id']}")
+                    desc_mod_obiect = st.text_input("Rezumat modificare obiect (pentru tabel AA)", placeholder="ex: Extindere asistență pentru dosar nou...", key=f"aa_desc_ob_{caj_row['id']}")
+
+                desc_alte_clauze = ""
+                status_opt = ["Activ", "Suspendat", "Încetat"]
+                idx_st = status_opt.index(caj_row["status"]) if caj_row.get("status") in status_opt else 0
+                status_nou = caj_row.get("status") or "Activ"
+                if bifa_alte:
+                    st.markdown("---")
+                    st.markdown("**3. Durată / Status / Alte Clauze prin AA:**")
+                    status_nou = st.selectbox("Status Contract", status_opt, index=idx_st, key=f"aa_st_{caj_row['id']}")
+                    desc_alte_clauze = st.text_area("Alte modificări convenite prin AA", placeholder="ex: Prelungire durată contract cu 12 luni...", key=f"aa_alte_{caj_row['id']}")
+
+                col_b1, col_b2 = st.columns(2)
+                if col_b1.button("✅ Salvează Actul Adițional", type="primary", use_container_width=True):
+                    if not nr_aa.strip():
+                        st.error("Te rog să introduci numărul Actului Adițional (ex: AA nr. 1/2026).")
+                    else:
+                        sectiuni_list = []
+                        if bifa_onorariu:
+                            sectiuni_list.append("Onorariu")
+                        if bifa_obiect:
+                            sectiuni_list.append("Obiect")
+                        if bifa_alte:
+                            sectiuni_list.append("Alte clauze")
+                        sectiuni_str = ", ".join(sectiuni_list) if sectiuni_list else "Modificare generală"
+
                         conn = get_connection()
                         cur = conn.cursor()
                         try:
                             cur.execute("""
-                                INSERT INTO contracte (
-                                    serie_numar, data_contract, client_id, obiect_contract,
-                                    tip_onorariu, valoare_onorariu, tarif_depasire, moneda, numar_ore, status
+                                INSERT INTO acte_aditionale (
+                                    contract_id, numar_aa, data_aa, sectiuni_modificate,
+                                    modificare_onorariu, modificare_obiect, alte_modificari
                                 )
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'Activ')
+                                VALUES (%s, %s, %s, %s, %s, %s, %s)
                             """, (
-                                serie_nr.strip(), dt_c, c_dict[client_caj], obiect_caj,
-                                tip_onor, val_onor, tarif_dep, moneda, nr_ore_abon
+                                caj_row["id"], nr_aa.strip(), dt_aa, sectiuni_str,
+                                desc_mod_onor.strip(), desc_mod_obiect.strip() or (obiect_nou.strip() if bifa_obiect else ""),
+                                desc_alte_clauze.strip()
+                            ))
+                            cur.execute("""
+                                UPDATE contracte
+                                SET tip_onorariu = %s, valoare_onorariu = %s, tarif_depasire = %s,
+                                    numar_ore = %s, moneda = %s, obiect_contract = %s, status = %s
+                                WHERE id = %s
+                            """, (
+                                tip_nou, val_noua, dep_nou, ore_noi, mon_noua,
+                                obiect_nou.strip(), status_nou, caj_row["id"]
                             ))
                             conn.commit()
                             goleste_cache_date()
-                            st.success(f"Contractul {serie_nr.strip()} a fost salvat!")
                         except Exception as e:
-                            st.error(f"Eroare la salvare: {e}")
+                            st.error(f"Eroare la salvarea Actului Adițional: {e}")
                         conn.close()
                         st.rerun()
 
+                if col_b2.button("❌ Anulează", use_container_width=True):
+                    st.rerun()
+
+            else:
+                # Editare directă a contractului (fără Act Adițional - corectare date)
+                st.warning("⚠️ Atenție: Modifici direct datele de bază ale contractului (corectare). Pentru modificări contractuale ulterioare, bifează opțiunea **Modifică prin Act Adițional (AA)** de mai sus.")
+                ec1, ec2 = st.columns(2)
+                serie_ed = ec1.text_input("Serie și Număr CAJ *", value=caj_row["serie_numar"] or "", key=f"ed_caj_ser_{caj_row['id']}")
+                dt_val_init = caj_row["data_contract"]
+                if isinstance(dt_val_init, str):
+                    dt_val_init = datetime.strptime(dt_val_init, "%Y-%m-%d").date()
+                dt_ed = ec2.date_input("Data Încheierii", value=dt_val_init or date.today(), key=f"ed_caj_dt_{caj_row['id']}")
+
+                tip_opt = ["Abonament", "Orar", "Fix", "Succes"]
+                idx_t = tip_opt.index(caj_row["tip_onorariu"]) if caj_row.get("tip_onorariu") in tip_opt else 0
+                mon_opt = ["EUR", "RON"]
+                idx_m = mon_opt.index(caj_row["moneda"]) if caj_row.get("moneda") in mon_opt else 0
+                status_opt = ["Activ", "Suspendat", "Încetat"]
+                idx_st = status_opt.index(caj_row["status"]) if caj_row.get("status") in status_opt else 0
+
+                ec3, ec4, ec5 = st.columns(3)
+                tip_ed = ec3.selectbox("Tip Onorariu", tip_opt, index=idx_t, key=f"ed_caj_tip_{caj_row['id']}")
+                val_ed = ec4.number_input("Valoare / Tarif", min_value=0.0, step=10.0, value=float(caj_row["valoare_onorariu"] or 0), key=f"ed_caj_val_{caj_row['id']}")
+                mon_ed = ec5.selectbox("Monedă", mon_opt, index=idx_m, key=f"ed_caj_mon_{caj_row['id']}")
+
+                ec6, ec7, ec8 = st.columns(3)
+                ore_ed = ec6.number_input("Ore incluse", min_value=0.0, step=1.0, value=float(caj_row["numar_ore"] or 0), key=f"ed_caj_ore_{caj_row['id']}")
+                dep_ed = ec7.number_input("Tarif depășire / h", min_value=0.0, step=10.0, value=float(caj_row["tarif_depasire"] or 0), key=f"ed_caj_dep_{caj_row['id']}")
+                st_ed = ec8.selectbox("Status", status_opt, index=idx_st, key=f"ed_caj_st_{caj_row['id']}")
+
+                ob_ed = st.text_area("Obiectul asistenței juridice", value=caj_row.get("obiect_contract") or "", key=f"ed_caj_ob_{caj_row['id']}")
+
+                col_d1, col_d2 = st.columns(2)
+                if col_d1.button("✅ Salvează Modificările", type="primary", use_container_width=True):
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    try:
+                        cur.execute("""
+                            UPDATE contracte
+                            SET serie_numar = %s, data_contract = %s, tip_onorariu = %s,
+                                valoare_onorariu = %s, tarif_depasire = %s, numar_ore = %s,
+                                moneda = %s, obiect_contract = %s, status = %s
+                            WHERE id = %s
+                        """, (
+                            serie_ed.strip(), dt_ed, tip_ed, val_ed, dep_ed, ore_ed,
+                            mon_ed, ob_ed.strip(), st_ed, caj_row["id"]
+                        ))
+                        conn.commit()
+                        goleste_cache_date()
+                    except Exception as e:
+                        st.error(f"Eroare la actualizare: {e}")
+                    conn.close()
+                    st.rerun()
+                if col_d2.button("❌ Anulează", use_container_width=True):
+                    st.rerun()
+
         @st.dialog("⚠️ Confirmare ștergere contract")
         def dialog_confirmare_stergere_caj(caj_id, serie_caj, client_caj):
-            st.write(f"Ești sigur că dorești să ștergi definitiv contractul **{serie_caj}** încheiat cu **{client_caj}**?")
-            st.caption("Această acțiune va elimina permanent înregistrarea din baza de date.")
+            st.error(f"🚨 Atenție! Ești sigur că dorești să ștergi definitiv contractul **{serie_caj}** încheiat cu **{client_caj}** (inclusiv eventualele Acte Adiționale asociate)?")
             col_da, col_nu = st.columns(2)
-            if col_da.button("✅ Da, șterge", type="primary", use_container_width=True):
+            if col_da.button("✅ Da, șterge definitiv", type="primary", use_container_width=True):
                 conn = get_connection()
                 cur = conn.cursor()
                 try:
+                    cur.execute("DELETE FROM acte_aditionale WHERE contract_id = %s", (caj_id,))
                     cur.execute("DELETE FROM contracte WHERE id = %s", (caj_id,))
                     conn.commit()
                     goleste_cache_date()
@@ -1520,75 +1863,119 @@ elif modul_ales == "Clienți":
         an_crt = date.today().year
         luna_crt = date.today().month
         contracte_rows = get_contracte_cached(an_crt, luna_crt)
+        aa_rows = get_acte_aditionale_cached()
 
-        st.markdown("#### 📋 Registru Contracte de Asistență Juridică (CAJ)")
+        # Grupăm actele adiționale per contract_id pentru afișare rapidă în coloana dedicată
+        aa_per_contract = {}
+        for aa in aa_rows:
+            aa_per_contract.setdefault(aa["contract_id"], []).append(aa)
 
-        if contracte_rows:
-            widths = [0.5, 1.3, 1.0, 1.5, 1.0, 1.3, 1.1, 1.3, 1.8, 0.8, 0.5]
-            headers = [
-                "ID", "Serie / Nr.", "Data", "Client", "Tip",
-                "Onorariu", "Ore Incl.", "Depășire", "Consum Lună", "Status", ""
-            ]
-            h_cols = st.columns(widths)
-            for col_h, text_h in zip(h_cols, headers):
-                col_h.markdown(
-                    f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{text_h}</div>",
-                    unsafe_allow_html=True
-                )
+        with st.container(border=True):
+            st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
+            st.markdown("#### 📋 Registru Contracte de Asistență Juridică (CAJ)")
 
-            for r in contracte_rows:
-                tip = r["tip_onorariu"] or "-"
-                mon = r["moneda"] or "EUR"
-                val_baza = float(r["valoare_onorariu"] or 0)
-                t_dep = float(r["tarif_depasire"] or 0)
-                ore_ab = float(r["numar_ore"] or 0)
-                ore_cons = float(r["ore_consumate_luna"] or 0)
-
-                if tip == "Abonament":
-                    onorariu_str = f"{val_baza:.2f} {mon}/h"
-                    ore_str = f"{ore_ab:.1f} h" if ore_ab > 0 else "Nelimitat"
-                    depasire_str = f"{t_dep:.2f} {mon}/h" if t_dep > 0 else f"{val_baza:.2f} {mon}/h"
-                    if ore_ab > 0:
-                        proc = (ore_cons / ore_ab) * 100
-                        consum_str = f"{ore_cons:.1f}/{ore_ab:.1f}h ({proc:.0f}%)"
-                    else:
-                        consum_str = f"{ore_cons:.1f} h"
-                elif tip == "Orar":
-                    onorariu_str = f"{val_baza:.2f} {mon}/h"
-                    ore_str = "-"
-                    depasire_str = "-"
-                    consum_str = f"{ore_cons:.1f} h"
-                else:
-                    onorariu_str = f"{val_baza:.2f} {mon}"
-                    ore_str = "-"
-                    depasire_str = "-"
-                    consum_str = "-"
-
-                r_cols = st.columns(widths)
-                valori_rand = [
-                    str(r["id"]),
-                    r["serie_numar"],
-                    str(r["data_contract"]),
-                    r["client_nume"],
-                    tip,
-                    onorariu_str,
-                    ore_str,
-                    depasire_str,
-                    consum_str,
-                    r["status"] or "Activ"
+            if contracte_rows:
+                widths = [0.45, 1.35, 0.95, 1.4, 0.9, 1.2, 0.95, 1.15, 1.4, 1.5, 0.75, 0.42, 0.42]
+                headers = [
+                    "Nr.", "Serie / Nr.", "Data", "Client", "Tip",
+                    "Onorariu", "Ore Incl.", "Depășire", "Consum Lună", "Modificări AA", "Status", "", ""
                 ]
-                for col_r, val_r in zip(r_cols[:-1], valori_rand):
-                    col_r.markdown(
-                        f"<div style='font-size:13px; color:#0F172A; padding-top:6px;'>{val_r}</div>",
+                h_cols = st.columns(widths)
+                for col_h, text_h in zip(h_cols, headers):
+                    col_h.markdown(
+                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{text_h}</div>",
                         unsafe_allow_html=True
                     )
 
-                if r_cols[-1].button("🗑️", key=f"del_row_caj_{r['id']}", help=f"Șterge contractul {r['serie_numar']}"):
-                    dialog_confirmare_stergere_caj(r["id"], r["serie_numar"], r["client_nume"])
+                for idx_k, r in enumerate(contracte_rows, start=1):
+                    tip = r["tip_onorariu"] or "-"
+                    mon = r["moneda"] or "EUR"
+                    val_baza = float(r["valoare_onorariu"] or 0)
+                    t_dep = float(r["tarif_depasire"] or 0)
+                    ore_ab = float(r["numar_ore"] or 0)
+                    ore_cons = float(r["ore_consumate_luna"] or 0)
 
-                st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
-        else:
-            st.info("Niciun contract înregistrat momentan. Folosește formularul de mai sus pentru a adăuga primul contract.")
+                    if tip == "Abonament":
+                        onorariu_str = f"{val_baza:.2f} {mon}/h"
+                        ore_str = f"{ore_ab:.1f} h" if ore_ab > 0 else "Nelimitat"
+                        depasire_str = f"{t_dep:.2f} {mon}/h" if t_dep > 0 else f"{val_baza:.2f} {mon}/h"
+                        if ore_ab > 0:
+                            proc = (ore_cons / ore_ab) * 100
+                            consum_str = f"{ore_cons:.1f}/{ore_ab:.1f}h ({proc:.0f}%)"
+                        else:
+                            consum_str = f"{ore_cons:.1f} h"
+                    elif tip == "Orar":
+                        onorariu_str = f"{val_baza:.2f} {mon}/h"
+                        ore_str = "-"
+                        depasire_str = "-"
+                        consum_str = f"{ore_cons:.1f} h"
+                    else:
+                        onorariu_str = f"{val_baza:.2f} {mon}"
+                        ore_str = "-"
+                        depasire_str = "-"
+                        consum_str = "-"
+
+                    lista_aa_c = aa_per_contract.get(r["id"], [])
+                    if lista_aa_c:
+                        ultimul_aa = lista_aa_c[0]
+                        aa_summary = f"📜 {len(lista_aa_c)} AA ({ultimul_aa['numar_aa']}: {ultimul_aa['sectiuni_modificate']})"
+                    else:
+                        aa_summary = "-"
+
+                    r_cols = st.columns(widths)
+                    valori_rand = [
+                        str(idx_k),
+                        r["serie_numar"],
+                        str(r["data_contract"]),
+                        r["client_nume"],
+                        tip,
+                        onorariu_str,
+                        ore_str,
+                        depasire_str,
+                        consum_str,
+                        aa_summary,
+                        r["status"] or "Activ"
+                    ]
+                    for col_r, val_r in zip(r_cols[:-2], valori_rand):
+                        col_r.markdown(
+                            f"<div style='font-size:13px; color:#0F172A; padding-top:4px;'>{val_r}</div>",
+                            unsafe_allow_html=True
+                        )
+
+                    with r_cols[-2]:
+                        st.markdown("<span class='row-action-marker' style='display:none;'></span>", unsafe_allow_html=True)
+                        if st.button("✏️", key=f"ed_row_caj_{r['id']}", help=f"Modifică contractul {r['serie_numar']} sau adaugă Act Adițional"):
+                            dialog_modifica_contract_sau_aa(r)
+
+                    with r_cols[-1]:
+                        st.markdown("<span class='row-action-marker' style='display:none;'></span>", unsafe_allow_html=True)
+                        if st.button("🗑️", key=f"del_row_caj_{r['id']}", help=f"Șterge contractul {r['serie_numar']}"):
+                            dialog_confirmare_stergere_caj(r["id"], r["serie_numar"], r["client_nume"])
+
+                    st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
+            else:
+                st.info("Niciun contract înregistrat momentan. Folosește formularul de mai sus pentru a adăuga primul contract.")
+
+        # Tabel dedicat tuturor modificărilor prin Acte Adiționale (AA)
+        if aa_rows:
+            with st.container(border=True):
+                st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
+                st.markdown("#### 📜 Registru Modificări prin Acte Adiționale (AA)")
+                aa_df_list = [
+                    {
+                        "Nr.": idx_a,
+                        "Act Adițional": a["numar_aa"],
+                        "Data AA": str(a["data_aa"]),
+                        "Contract CAJ": a["contract_serie"],
+                        "Client": a["client_nume"],
+                        "Secțiuni Modificate": a["sectiuni_modificate"] or "-",
+                        "Modificare Onorariu": a["modificare_onorariu"] or "-",
+                        "Modificare Obiect": a["modificare_obiect"] or "-",
+                        "Alte Clauze": a["alte_modificari"] or "-"
+                    }
+                    for idx_a, a in enumerate(aa_rows, start=1)
+                ]
+                st.dataframe(pd.DataFrame(aa_df_list), use_container_width=True, hide_index=True)
 
 # === 3. PONTAJ & TIMESHEET ===
 elif modul_ales == "Pontaj":
