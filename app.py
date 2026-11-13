@@ -7,7 +7,9 @@ import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
+from zoneinfo import ZoneInfo
 from datetime import datetime, date
 from zeep import Client
 from playwright.sync_api import sync_playwright
@@ -902,6 +904,36 @@ def verifica_abonament_dupa_pontaj(client_id, data_activitate):
     conn.close()
     return mesaje_ui
 
+
+TZ_RO = ZoneInfo("Europe/Bucharest")
+
+def acum_ro():
+    return datetime.now(TZ_RO)
+
+def repara_coloane_pontaj_daca_lipsesc():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        for stmt in [
+            "ALTER TABLE pontaj ADD COLUMN tip_referinta VARCHAR(255) DEFAULT 'Consultanță curentă'",
+            "ALTER TABLE pontaj ADD COLUMN valoare_totala DECIMAL(12,2) DEFAULT 0.0",
+            "ALTER TABLE pontaj ADD COLUMN moneda VARCHAR(20) DEFAULT 'RON'",
+            "ALTER TABLE pontaj ADD COLUMN ora_start VARCHAR(10) DEFAULT ''",
+            "ALTER TABLE pontaj ADD COLUMN ora_stop VARCHAR(10) DEFAULT ''",
+            "ALTER TABLE pontaj MODIFY COLUMN dosar_id INT NULL",
+            "ALTER TABLE pontaj_activ ADD COLUMN tip_referinta VARCHAR(255) DEFAULT 'Consultanță curentă'",
+            "ALTER TABLE pontaj_activ ADD COLUMN offset_secunde BIGINT DEFAULT 0",
+            "ALTER TABLE pontaj_activ ADD COLUMN pontaj_id_reluat INT NULL",
+        ]:
+            try:
+                cur.execute(stmt)
+            except Exception:
+                pass
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
 def interogheaza_portal_just(numar_dosar):
@@ -1037,7 +1069,7 @@ def executa_interogare(numar_dosar, sursa):
 # --- VERIFICARE GLOBALĂ CRONOMETRU > 10 ORE LA ORICE ACCESARE ---
 def verifica_cronometre_peste_10_ore():
     try:
-        acum_ts = int(datetime.now().timestamp())
+        acum_ts = int(acum_ro().timestamp())
         conn = get_connection()
         cur = conn.cursor()
         cur.execute("""
@@ -1054,7 +1086,7 @@ def verifica_cronometre_peste_10_ore():
             secunde_scurse = max(0, acum_ts - int(r["start_ts"])) + int(r.get("offset_secunde") or 0)
             ore_scurse = secunde_scurse / 3600.0
             if ore_scurse >= 10.0:
-                ora_start_str = datetime.fromtimestamp(int(r["start_ts"])).strftime("%d.%m.%Y %H:%M")
+                ora_start_str = datetime.fromtimestamp(int(r["start_ts"]), tz=TZ_RO).strftime("%d.%m.%Y %H:%M")
                 h_sc = int(ore_scurse)
                 m_sc = int(round((ore_scurse - h_sc) * 60))
                 alerte_active_ui.append(
@@ -1487,18 +1519,21 @@ elif modul_ales == "Pontaj":
             )
 
             if cronometru_activ:
-                acum_ts = int(datetime.now().timestamp())
+                dt_acum_ro = acum_ro()
+                acum_ts = int(dt_acum_ro.timestamp())
+                start_ts_val = int(cronometru_activ["start_ts"])
                 offset_sec = int(cronometru_activ.get("offset_secunde") or 0)
-                sec_scurse_total = max(0, acum_ts - int(cronometru_activ["start_ts"])) + offset_sec
+                sec_scurse_total = max(0, acum_ts - start_ts_val) + offset_sec
                 h_live = sec_scurse_total // 3600
-                m_live = (sec_scurse_total % 3600) // 60
-                data_pornire_fmt = datetime.fromtimestamp(int(cronometru_activ["start_ts"])).strftime("%d.%m.%Y")
-                ora_pornire_fmt = datetime.fromtimestamp(int(cronometru_activ["start_ts"])).strftime("%H:%M")
+
+                dt_start_ro = datetime.fromtimestamp(start_ts_val, tz=TZ_RO)
+                data_pornire_fmt = dt_start_ro.strftime("%d.%m.%Y")
+                ora_pornire_fmt = dt_start_ro.strftime("%H:%M")
                 nume_cl_activ = c_rev_map.get(cronometru_activ["client_id"], "Client")
                 tip_ref_activ = cronometru_activ.get("tip_referinta") or "Consultanță curentă"
                 id_reluat = cronometru_activ.get("pontaj_id_reluat")
 
-                c_dt, c_info, c_ceas, c_stop, c_cancel = st.columns([1.2, 3.3, 1.2, 1.1, 0.55])
+                c_dt, c_info, c_ceas, c_stop, c_cancel = st.columns([1.2, 3.1, 1.4, 1.1, 0.55])
                 with c_dt:
                     st.markdown("<div style='font-size:11px; font-weight:600; color:#64748B; margin-bottom:3px;'>Data activității</div>", unsafe_allow_html=True)
                     st.markdown(
@@ -1521,32 +1556,69 @@ elif modul_ales == "Pontaj":
                     st.caption(f"🏢 **{nume_cl_activ}** • {tip_ref_activ} • Pornit la **{ora_pornire_fmt}**{nota_reluare}")
 
                 with c_ceas:
-                    st.markdown("<div style='font-size:11px; font-weight:600; color:#64748B; margin-bottom:3px; text-align:center;'>Durată</div>", unsafe_allow_html=True)
-                    culoare_ceas = "#DC2626" if h_live >= 10 else "#0F172A"
-                    st.markdown(
-                        f"<div style='background:#F8FAFC; border:1px solid #CBD5E1; border-radius:8px; padding:5px 8px; text-align:center; font-size:19px; font-weight:800; color:{culoare_ceas};'>"
-                        f"{h_live}:{m_live:02d}"
-                        f"</div>",
-                        unsafe_allow_html=True
-                    )
+                    st.markdown("<div style='font-size:11px; font-weight:600; color:#64748B; margin-bottom:3px; text-align:center;'>Durată în timp real</div>", unsafe_allow_html=True)
+                    # Ceas live coroborat direct cu ceasul calculatorului (Date.now())
+                    start_ms = start_ts_val * 1000
+                    offset_ms = offset_sec * 1000
+                    components.html(f"""
+                    <div id="live-clock-box" style="
+                        background:#F8FAFC; border:1.5px solid #D4AF37; border-radius:8px;
+                        padding:5px 8px; text-align:center; font-family: 'Segoe UI', Arial, sans-serif;
+                        font-size:18px; font-weight:800; color:#0F172A; line-height:1.25;">
+                        0:00:00
+                    </div>
+                    <script>
+                        const startMs = {start_ms};
+                        const offsetMs = {offset_ms};
+                        const box = document.getElementById("live-clock-box");
+                        function updateClock() {{
+                            const nowMs = Date.now();
+                            const elapsedSec = Math.max(0, Math.floor((nowMs - startMs + offsetMs) / 1000));
+                            const h = Math.floor(elapsedSec / 3600);
+                            const m = Math.floor((elapsedSec % 3600) / 60);
+                            const s = elapsedSec % 60;
+                            const mm = String(m).padStart(2, '0');
+                            const ss = String(s).padStart(2, '0');
+                            box.textContent = h + ":" + mm + ":" + ss;
+                            if (h >= 10) {{
+                                box.style.color = "#DC2626";
+                                box.style.borderColor = "#DC2626";
+                            }}
+                        }}
+                        updateClock();
+                        setInterval(updateClock, 1000);
+                    </script>
+                    """, height=44)
 
                 with c_stop:
                     st.markdown("<div style='font-size:11px; color:transparent; margin-bottom:3px;'>.</div>", unsafe_allow_html=True)
                     st.markdown("<span class='btn-stop-marker' style='display:none;'></span>", unsafe_allow_html=True)
                     if st.button("⏹️ STOP", use_container_width=True, help="Oprește ceasul și salvează activitatea"):
-                        total_minute = max(1, int(round(sec_scurse_total / 60.0)))
+                        repara_coloane_pontaj_daca_lipsesc()
+                        dt_stop_ro = acum_ro()
+                        sec_finale = max(0, int(dt_stop_ro.timestamp()) - start_ts_val) + offset_sec
+                        total_minute = max(1, int(round(sec_finale / 60.0)))
                         ore_salvate = round(total_minute / 60.0, 2)
-                        dt_azi = date.today()
-                        ora_stop_fmt = datetime.now().strftime("%H:%M")
-                        cl_id_s = cronometru_activ["client_id"]
+                        dt_azi = dt_stop_ro.date()
+                        ora_stop_fmt = dt_stop_ro.strftime("%H:%M")
+                        cl_id_s = int(cronometru_activ["client_id"])
                         ds_id_s = cronometru_activ.get("dosar_id")
+                        ds_id_s = int(ds_id_s) if ds_id_s is not None else None
                         desc_finala = descriere_live.strip() or tip_ref_activ
 
                         conn = get_connection()
                         cur = conn.cursor()
 
+                        # Verificăm dacă utilizatorul există în DB; dacă nu, folosim primul utilizator activ
+                        cur.execute("SELECT id FROM utilizatori WHERE id = %s", (id_utilizator_curent,))
+                        if not cur.fetchone():
+                            cur.execute("SELECT id FROM utilizatori ORDER BY id ASC LIMIT 1")
+                            u_fallback = cur.fetchone()
+                            uid_save = u_fallback["id"] if u_fallback else 1
+                        else:
+                            uid_save = id_utilizator_curent
+
                         if id_reluat:
-                            # Actualizăm înregistrarea reluată (păstrând continuitatea duratei ajustate + timpul nou)
                             tarif_ap, val_tot, mon_c, nota_t = calculeaza_tarif_si_valoare_pontaj(
                                 cl_id_s, dt_azi, ore_salvate, 0.0, exclude_pontaj_id=id_reluat
                             )
@@ -1567,7 +1639,7 @@ elif modul_ales == "Pontaj":
                                 )
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                             """, (
-                                dt_azi, id_utilizator_curent, cl_id_s, ds_id_s, tip_ref_activ,
+                                dt_azi, uid_save, cl_id_s, ds_id_s, tip_ref_activ,
                                 desc_finala, ore_salvate, tarif_ap, val_tot, mon_c, ora_pornire_fmt, ora_stop_fmt
                             ))
 
@@ -1597,9 +1669,6 @@ elif modul_ales == "Pontaj":
                         conn.close()
                         st.rerun()
 
-                if st.button("🔄 Actualizează timpul afișat", key="btn_refresh_timer"):
-                    st.rerun()
-
             else:
                 c_dt, c_txt, c_cl, c_asoc, c_timp, c_start = st.columns([1.15, 2.1, 1.35, 1.75, 0.75, 0.95])
 
@@ -1607,7 +1676,7 @@ elif modul_ales == "Pontaj":
                     st.markdown("<div style='font-size:11px; font-weight:600; color:#475569; margin-bottom:3px;'>Data activității</div>", unsafe_allow_html=True)
                     st.markdown(
                         f"<div style='background:#F8FAFC; border:1px solid #CBD5E1; border-radius:8px; padding:7px 8px; font-size:13px; font-weight:600; color:#475569; text-align:center;'>"
-                        f"📅 {date.today().strftime('%d.%m.%Y')}"
+                        f"📅 {acum_ro().strftime('%d.%m.%Y')}"
                         f"</div>",
                         unsafe_allow_html=True
                     )
@@ -1654,7 +1723,7 @@ elif modul_ales == "Pontaj":
                     st.markdown("<span class='btn-start-marker' style='display:none;'></span>", unsafe_allow_html=True)
                     if st.button("▶️ START", use_container_width=True):
                         ds_id_start, tip_ref_start = optiuni_asoc_live[asoc_aleasa_live]
-                        now_ts = int(datetime.now().timestamp())
+                        now_ts = int(acum_ro().timestamp())
 
                         conn = get_connection()
                         cur = conn.cursor()
@@ -1861,7 +1930,7 @@ elif modul_ales == "Pontaj":
                         if cronometru_activ is not None:
                             st.warning("⚠️ Ai deja un cronometru pornit în partea de sus! Oprește-l mai întâi înainte de a relua o altă activitate.")
                         else:
-                            now_ts = int(datetime.now().timestamp())
+                            now_ts = int(acum_ro().timestamp())
                             # Pornim ceasul cu offset egal cu durata deja salvată/ajustată a activității
                             offset_sec_reluare = int(round(float(item["ore_lucrate"] or 0) * 3600))
                             conn = get_connection()
@@ -1934,15 +2003,23 @@ elif modul_ales == "Pontaj":
                                 cl_id_manual, dt_p, total_ore_dec, tarif_m
                             )
 
+                            repara_coloane_pontaj_daca_lipsesc()
                             conn = get_connection()
                             cur = conn.cursor()
+                            cur.execute("SELECT id FROM utilizatori WHERE id = %s", (id_utilizator_curent,))
+                            if not cur.fetchone():
+                                cur.execute("SELECT id FROM utilizatori ORDER BY id ASC LIMIT 1")
+                                u_fb = cur.fetchone()
+                                uid_m = u_fb["id"] if u_fb else 1
+                            else:
+                                uid_m = id_utilizator_curent
                             cur.execute("""
                                 INSERT INTO pontaj (
                                     data_activitate, utilizator_id, client_id, dosar_id, tip_referinta,
                                     descriere_activitate, ore_lucrate, onorariu_orar, valoare_totala, moneda
                                 )
                                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """, (dt_p, id_utilizator_curent, cl_id_manual, dosar_id_val, tip_ref_val, act_m.strip(), total_ore_dec, tarif_aplicat, val_totala_calc, moneda_calc))
+                            """, (dt_p, uid_m, cl_id_manual, dosar_id_val, tip_ref_val, act_m.strip(), total_ore_dec, tarif_aplicat, val_totala_calc, moneda_calc))
                             conn.commit()
                             conn.close()
 
