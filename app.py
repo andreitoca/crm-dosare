@@ -1,5 +1,6 @@
 import os
 import io
+import requests
 import threading
 import re
 import ssl
@@ -1164,6 +1165,71 @@ def insereaza_pontaj_sigur(cur, data_act, uid, cl_id, ds_id, tip_ref, desc_act, 
     vals = [cand_data[k] for k in cols_prezente]
     cur.execute(f"INSERT INTO pontaj ({cols_sql}) VALUES ({placeholders})", tuple(vals))
 
+
+def interogheaza_anaf_cui(cui_raw):
+    """
+    Interoghează API-ul public ANAF (v9/v8) pentru un CUI (cu sau fără prefix RO).
+    Returnează datele firmei, statutul de plătitor TVA și verifică neconcordanța dacă s-a introdus prefixul RO.
+    """
+    cui_curat = (cui_raw or "").strip().upper()
+    are_prefix_ro = cui_curat.startswith("RO")
+    doar_cifre = re.sub(r"\D", "", cui_curat)
+    if not doar_cifre:
+        return None, "Introdu un CUI numeric valid (ex: 37477239 sau RO37477239)."
+
+    cui_int = int(doar_cifre)
+    azi_str = acum_ro().strftime("%Y-%m-%d")
+    payload = [{"cui": cui_int, "data": azi_str}]
+    headers = {"Content-Type": "application/json", "Accept": "application/json"}
+
+    resp_json = None
+    for url_anaf in [
+        "https://webservicesp.anaf.ro/api/PlatitorTvaRest/v9/tva",
+        "https://webservicesp.anaf.ro/PlatitorTvaRest/api/v8/ws/tva",
+    ]:
+        try:
+            r = requests.post(url_anaf, json=payload, headers=headers, timeout=8)
+            if r.status_code == 200:
+                data_r = r.json()
+                if data_r and data_r.get("found"):
+                    resp_json = data_r["found"][0]
+                    break
+        except Exception:
+            continue
+
+    if not resp_json:
+        return None, f"CUI-ul {doar_cifre} nu a fost găsit în baza de date ANAF sau serviciul ANAF este temporar indisponibil."
+
+    dg = resp_json.get("date_generale") or {}
+    inreg_tva = resp_json.get("inregistrare_scop_Tva") or {}
+    stare_inact = resp_json.get("stare_inactiv") or {}
+
+    denumire = (dg.get("denumire") or "").strip()
+    adresa = (dg.get("adresa") or "").strip()
+    telefon = (dg.get("telefon") or "").strip()
+    nr_reg_com = (dg.get("nrRegCom") or "").strip()
+    cod_postal = (dg.get("codPostal") or "").strip()
+    if cod_postal and cod_postal not in adresa:
+        adresa = f"{adresa}, CP {cod_postal}" if adresa else cod_postal
+
+    este_platitor_tva = bool(inreg_tva.get("scpTVA", False))
+    este_inactiv = bool(stare_inact.get("statusInactivi", False))
+
+    cui_formatat = f"RO{doar_cifre}" if este_platitor_tva else str(doar_cifre)
+
+    return {
+        "cui_cifre": str(doar_cifre),
+        "cui_formatat": cui_formatat,
+        "are_prefix_ro_introdus": are_prefix_ro,
+        "denumire": denumire,
+        "adresa": adresa,
+        "telefon": telefon,
+        "nr_reg_com": nr_reg_com,
+        "este_platitor_tva": este_platitor_tva,
+        "este_inactiv": este_inactiv,
+        "stare_firma": (dg.get("stare_inregistrare") or "").strip(),
+    }, None
+
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
 def interogheaza_portal_just(numar_dosar):
@@ -1497,82 +1563,190 @@ elif modul_ales == "Clienți":
     # TAB 1: BAZĂ DE DATE CLIENȚI
     # ---------------------------------------------------------
     with tab_cl:
+        # Inițializare stări pentru preluare și editare liberă a datelor ANAF
+        for k_init, v_init in [
+            ("cl_new_cui", ""),
+            ("cl_new_den", ""),
+            ("cl_new_tip", "PJ (Companie)"),
+            ("cl_new_rep", ""),
+            ("cl_new_tel", ""),
+            ("cl_new_em", ""),
+            ("cl_new_adr", ""),
+            ("cl_anaf_feedback", None),
+        ]:
+            if k_init not in st.session_state:
+                st.session_state[k_init] = v_init
+
         with st.container(border=True):
             st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
-            with st.expander("➕ Adaugă Client Nou", expanded=False):
-                with st.form("form_add_client", clear_on_submit=True):
-                    c1, c2, c3 = st.columns([2, 1, 1])
-                    den = c1.text_input("Denumire Client / Nume Complet *")
-                    tip_c = c2.selectbox("Tip", ["PJ (Companie)", "PF (Persoană Fizică)"])
-                    cui = c3.text_input("CUI / CNP")
+            with st.expander("➕ Adaugă Client Nou (cu preluare automată din ANAF)", expanded=False):
+                # Rând 1: CUI / CNP + Buton Preia date din ANAF
+                ca1, ca2, ca3 = st.columns([1.3, 1.1, 1.6], vertical_alignment="bottom")
+                cui_input_val = ca1.text_input(
+                    "CUI / CNP (ex: 37477239 sau RO37477239)",
+                    key="cl_new_cui"
+                )
+                if ca2.button("🔍 Preia date din ANAF", use_container_width=True):
+                    with st.spinner("Se interoghează baza de date ANAF..."):
+                        rez_anaf, err_anaf = interogheaza_anaf_cui(cui_input_val)
+                        if err_anaf:
+                            st.session_state.cl_anaf_feedback = ("error", err_anaf, None)
+                        else:
+                            st.session_state.cl_new_den = rez_anaf["denumire"]
+                            st.session_state.cl_new_adr = rez_anaf["adresa"]
+                            if rez_anaf["telefon"]:
+                                st.session_state.cl_new_tel = rez_anaf["telefon"]
+                            st.session_state.cl_new_tip = "PJ (Companie)"
+                            st.session_state.cl_new_cui = rez_anaf["cui_formatat"]
+                            st.session_state.cl_anaf_feedback = ("ok", None, rez_anaf)
+                            st.rerun()
 
-                    c4, c5, c6 = st.columns([1.5, 1, 1.5])
-                    rep = c4.text_input("Reprezentant Legal / Contact")
-                    tel = c5.text_input("Telefon")
-                    em = c6.text_input("Email")
+                ca3.caption("Datele preluate din ANAF se completează mai jos și pot fi modificate liber înainte de salvare.")
 
-                    adr = st.text_input("Adresă / Sediu Social")
+                # Afișare statut TVA și eventuale avertizări (ex. CUI introdus cu RO, dar firma NU este plătitoare de TVA!)
+                fb_anaf = st.session_state.get("cl_anaf_feedback")
+                if fb_anaf:
+                    tip_fb, msg_err, info_anaf = fb_anaf
+                    if tip_fb == "error":
+                        st.error(msg_err)
+                    elif info_anaf:
+                        if info_anaf["are_prefix_ro_introdus"] and not info_anaf["este_platitor_tva"]:
+                            st.warning(
+                                f"⚠️ **Atenție TVA:** Ai introdus CUI-ul cu prefixul **RO**, însă conform ANAF, societatea **{info_anaf['denumire']}** "
+                                f"**NU este plătitoare de TVA**! Am ajustat automat CUI-ul fără RO (`{info_anaf['cui_cifre']}`)."
+                            )
+                        elif not info_anaf["are_prefix_ro_introdus"] and info_anaf["este_platitor_tva"]:
+                            st.info(
+                                f"ℹ️ **Info TVA:** Conform ANAF, **{info_anaf['denumire']}** **ESTE plătitoare de TVA** "
+                                f"(am adăugat automat prefixul `RO`: `{info_anaf['cui_formatat']}`)."
+                            )
 
-                    if st.form_submit_button("💾 Salvează Clientul", type="primary") and den:
+                        statut_tva_txt = "✅ Plătitor de TVA (RO)" if info_anaf["este_platitor_tva"] else "❌ Neplătitor de TVA"
+                        reg_txt = f" • Reg. Com.: `{info_anaf['nr_reg_com']}`" if info_anaf.get("nr_reg_com") else ""
+                        st.success(f"🏛️ **Date preluate din ANAF:** {statut_tva_txt}{reg_txt} • Stare: {info_anaf.get('stare_firma') or 'Activă'}. Poți edita oricare câmp de mai jos dacă datele ANAF nu sunt actuale.")
+                        if info_anaf.get("este_inactiv"):
+                            st.error("🚨 **Atenție:** Contribuabilul figurează ca **INACTIV** în registrul ANAF!")
+
+                # Câmpuri complet editabile (pre-populate din ANAF sau introduse manual)
+                c1, c2 = st.columns([2.2, 1])
+                den = c1.text_input("Denumire Client / Nume Complet *", key="cl_new_den")
+                tip_c = c2.selectbox("Tip", ["PJ (Companie)", "PF (Persoană Fizică)"], key="cl_new_tip")
+
+                c4, c5, c6 = st.columns([1.5, 1, 1.5])
+                rep = c4.text_input("Reprezentant Legal / Contact", key="cl_new_rep")
+                tel = c5.text_input("Telefon", key="cl_new_tel")
+                em = c6.text_input("Email", key="cl_new_em")
+
+                adr = st.text_input("Adresă / Sediu Social (editabilă)", key="cl_new_adr")
+
+                cb_save, cb_reset = st.columns([1.3, 1])
+                if cb_save.button("💾 Salvează Clientul", type="primary", use_container_width=True):
+                    if not den.strip():
+                        st.warning("Te rog să completezi denumirea clientului.")
+                    else:
                         conn = get_connection()
                         cur = conn.cursor()
                         cur.execute("""
                             INSERT INTO clienti (denumire, tip_client, cui_cnp, adresa, reprezentant, telefon, email)
                             VALUES (%s, %s, %s, %s, %s, %s, %s)
-                        """, (den.strip(), tip_c, cui.strip(), adr.strip(), rep.strip(), tel.strip(), em.strip()))
+                        """, (
+                            den.strip(), tip_c, st.session_state.cl_new_cui.strip(),
+                            adr.strip(), rep.strip(), tel.strip(), em.strip()
+                        ))
                         conn.commit()
                         conn.close()
+                        for k_rst in ["cl_new_cui", "cl_new_den", "cl_new_rep", "cl_new_tel", "cl_new_em", "cl_new_adr"]:
+                            st.session_state[k_rst] = ""
+                        st.session_state.cl_anaf_feedback = None
                         goleste_cache_date()
                         st.success(f"Clientul '{den.strip()}' a fost adăugat!")
                         st.rerun()
 
-        # Pop-up Modificare Date Client (cu mesaj de atenționare)
+                if cb_reset.button("🧹 Golește câmpurile", use_container_width=True):
+                    for k_rst in ["cl_new_cui", "cl_new_den", "cl_new_rep", "cl_new_tel", "cl_new_em", "cl_new_adr"]:
+                        st.session_state[k_rst] = ""
+                    st.session_state.cl_anaf_feedback = None
+                    st.rerun()
+
+        # Pop-up Modificare Date Client (cu mesaj de atenționare + re-verificare ANAF)
         @st.dialog("✏️ Modificare Date Client")
         def dialog_modifica_client(cl_row):
             st.warning(f"⚠️ Atenție: Modificarea datelor clientului **{cl_row['denumire']}** va actualiza automat informațiile în toate contractele, dosarele și pontajele asociate acestuia.")
-            with st.form(f"form_edit_client_{cl_row['id']}"):
-                ec1, ec2 = st.columns([2, 1])
-                den_nou = ec1.text_input("Denumire Client *", value=cl_row["denumire"] or "")
-                tip_opt = ["PJ (Companie)", "PF (Persoană Fizică)"]
-                idx_tip = tip_opt.index(cl_row["tip_client"]) if cl_row.get("tip_client") in tip_opt else 0
-                tip_nou = ec2.selectbox("Tip", tip_opt, index=idx_tip)
 
-                ec3, ec4 = st.columns(2)
-                cui_nou = ec3.text_input("CUI / CNP", value=cl_row["cui_cnp"] or "")
-                rep_nou = ec4.text_input("Reprezentant Legal / Contact", value=cl_row["reprezentant"] or "")
+            cid = cl_row["id"]
+            if f"ed_cl_init_{cid}" not in st.session_state:
+                st.session_state[f"ed_cl_init_{cid}"] = True
+                st.session_state[f"ed_cl_cui_{cid}"] = cl_row["cui_cnp"] or ""
+                st.session_state[f"ed_cl_den_{cid}"] = cl_row["denumire"] or ""
+                st.session_state[f"ed_cl_adr_{cid}"] = cl_row["adresa"] or ""
+                st.session_state[f"ed_cl_tel_{cid}"] = cl_row["telefon"] or ""
+                st.session_state[f"ed_cl_anaf_msg_{cid}"] = None
 
-                ec5, ec6 = st.columns(2)
-                tel_nou = ec5.text_input("Telefon", value=cl_row["telefon"] or "")
-                em_nou = ec6.text_input("Email", value=cl_row["email"] or "")
-
-                adr_nou = st.text_input("Adresă / Sediu Social", value=cl_row["adresa"] or "")
-
-                col_s1, col_s2 = st.columns(2)
-                salveaza_cl = col_s1.form_submit_button("✅ Confirmă și Salvează", type="primary", use_container_width=True)
-                anuleaza_cl = col_s2.form_submit_button("❌ Anulează", use_container_width=True)
-
-                if salveaza_cl and den_nou.strip():
-                    conn = get_connection()
-                    cur = conn.cursor()
-                    try:
-                        cur.execute("""
-                            UPDATE clienti
-                            SET denumire = %s, tip_client = %s, cui_cnp = %s,
-                                reprezentant = %s, telefon = %s, email = %s, adresa = %s
-                            WHERE id = %s
-                        """, (
-                            den_nou.strip(), tip_nou, cui_nou.strip(),
-                            rep_nou.strip(), tel_nou.strip(), em_nou.strip(), adr_nou.strip(),
-                            cl_row["id"]
-                        ))
-                        conn.commit()
-                        goleste_cache_date()
-                    except Exception as e:
-                        st.error(f"Eroare la actualizare: {e}")
-                    conn.close()
+            ec_top1, ec_top2 = st.columns([1.4, 1], vertical_alignment="bottom")
+            cui_nou = ec_top1.text_input("CUI / CNP", key=f"ed_cl_cui_{cid}")
+            if ec_top2.button("🔍 Verifică / Preia din ANAF", key=f"btn_ed_anaf_{cid}", use_container_width=True):
+                rez_a, err_a = interogheaza_anaf_cui(cui_nou)
+                if err_a:
+                    st.session_state[f"ed_cl_anaf_msg_{cid}"] = ("error", err_a, None)
+                else:
+                    st.session_state[f"ed_cl_den_{cid}"] = rez_a["denumire"]
+                    st.session_state[f"ed_cl_adr_{cid}"] = rez_a["adresa"]
+                    if rez_a["telefon"]:
+                        st.session_state[f"ed_cl_tel_{cid}"] = rez_a["telefon"]
+                    st.session_state[f"ed_cl_cui_{cid}"] = rez_a["cui_formatat"]
+                    st.session_state[f"ed_cl_anaf_msg_{cid}"] = ("ok", None, rez_a)
                     st.rerun()
-                if anuleaza_cl:
-                    st.rerun()
+
+            msg_ed_a = st.session_state.get(f"ed_cl_anaf_msg_{cid}")
+            if msg_ed_a:
+                t_a, e_a, inf_a = msg_ed_a
+                if t_a == "error":
+                    st.error(e_a)
+                elif inf_a:
+                    if inf_a["are_prefix_ro_introdus"] and not inf_a["este_platitor_tva"]:
+                        st.warning(f"⚠️ **Atenție TVA:** Ai introdus CUI-ul cu **RO**, dar **{inf_a['denumire']}** **NU este plătitoare de TVA**! Am eliminat prefixul `RO`.")
+                    statut_t = "✅ Plătitor de TVA (RO)" if inf_a["este_platitor_tva"] else "❌ Neplătitor de TVA"
+                    st.info(f"🏛️ ANAF: {statut_t} • Poți modifica liber câmpurile de mai jos înainte de salvare.")
+
+            ec1, ec2 = st.columns([2, 1])
+            den_nou = ec1.text_input("Denumire Client *", key=f"ed_cl_den_{cid}")
+            tip_opt = ["PJ (Companie)", "PF (Persoană Fizică)"]
+            idx_tip = tip_opt.index(cl_row["tip_client"]) if cl_row.get("tip_client") in tip_opt else 0
+            tip_nou = ec2.selectbox("Tip", tip_opt, index=idx_tip, key=f"ed_cl_tip_{cid}")
+
+            ec4, ec5, ec6 = st.columns([1.4, 1, 1.4])
+            rep_nou = ec4.text_input("Reprezentant Legal / Contact", value=cl_row["reprezentant"] or "", key=f"ed_cl_rep_{cid}")
+            tel_nou = ec5.text_input("Telefon", key=f"ed_cl_tel_{cid}")
+            em_nou = ec6.text_input("Email", value=cl_row["email"] or "", key=f"ed_cl_em_{cid}")
+
+            adr_nou = st.text_input("Adresă / Sediu Social", key=f"ed_cl_adr_{cid}")
+
+            col_s1, col_s2 = st.columns(2)
+            if col_s1.button("✅ Confirmă și Salvează", type="primary", use_container_width=True, key=f"btn_save_ed_cl_{cid}") and den_nou.strip():
+                conn = get_connection()
+                cur = conn.cursor()
+                try:
+                    cur.execute("""
+                        UPDATE clienti
+                        SET denumire = %s, tip_client = %s, cui_cnp = %s,
+                            reprezentant = %s, telefon = %s, email = %s, adresa = %s
+                        WHERE id = %s
+                    """, (
+                        den_nou.strip(), tip_nou, st.session_state[f"ed_cl_cui_{cid}"].strip(),
+                        rep_nou.strip(), tel_nou.strip(), em_nou.strip(), adr_nou.strip(),
+                        cid
+                    ))
+                    conn.commit()
+                    goleste_cache_date()
+                    st.session_state.pop(f"ed_cl_init_{cid}", None)
+                except Exception as e:
+                    st.error(f"Eroare la actualizare: {e}")
+                conn.close()
+                st.rerun()
+
+            if col_s2.button("❌ Anulează", use_container_width=True, key=f"btn_canc_ed_cl_{cid}"):
+                st.session_state.pop(f"ed_cl_init_{cid}", None)
+                st.rerun()
 
         # Pop-up Ștergere Client (cu mesaj de atenționare)
         @st.dialog("⚠️ Atenționare: Ștergere Client")
