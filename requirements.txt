@@ -6,3 +6,4 @@ cryptography
 playwright
 requests
 beautifulsoup4
+python-docx
