@@ -150,6 +150,8 @@ st.markdown("""
         color: #FFFFFF !important;
         font-weight: 700 !important;
         border-radius: 8px !important;
+        height: 40px !important;
+        min-height: 40px !important;
         box-shadow: 0 2px 6px rgba(0, 184, 124, 0.3) !important;
     }
     div.stElementContainer:has(.btn-start-marker) + div.stElementContainer button:hover {
@@ -157,32 +159,61 @@ st.markdown("""
         color: #FFFFFF !important;
     }
 
-    /* Buton STOP rosu intens */
+    /* Buton STOP rosu intens + aliniere identica pe inaltime cu butonul X */
     div.stElementContainer:has(.btn-stop-marker) + div.stElementContainer button {
         background-color: #DC2626 !important;
         border: 1px solid #B91C1C !important;
         color: #FFFFFF !important;
         font-weight: 700 !important;
         border-radius: 8px !important;
+        height: 40px !important;
+        min-height: 40px !important;
         box-shadow: 0 2px 6px rgba(220, 38, 38, 0.3) !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.btn-stop-marker) div.stButton > button {
+        height: 40px !important;
+        min-height: 40px !important;
+        border-radius: 8px !important;
     }
     div.stElementContainer:has(.btn-stop-marker) + div.stElementContainer button:hover {
         background-color: #B91C1C !important;
         color: #FFFFFF !important;
     }
 
-    /* Buton Reluare (Start mic) verde discret in lista Activitate incheiata */
+    /* Ascundem complet spatiul ocupat de markerele invizibile ca sa nu decaleze butoanele pe verticala */
+    div.stElementContainer:has(.btn-start-marker),
+    div.stElementContainer:has(.btn-stop-marker),
+    div.stElementContainer:has(.btn-resume-marker),
+    div.stElementContainer:has(.timer-gold-marker),
+    div.stElementContainer:has(.manual-gold-marker) {
+        display: none !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+
+    /* Buton Reluare (Start mic) verde discret in lista Activitate incheiata, aliniat identic cu Editare si Stergere */
     div.stElementContainer:has(.btn-resume-marker) + div.stElementContainer button {
         background-color: #ECFDF5 !important;
         border: 1px solid #00B87C !important;
         color: #047857 !important;
         font-weight: 700 !important;
-        border-radius: 6px !important;
-        padding: 2px 8px !important;
+        border-radius: 8px !important;
+        min-height: 38px !important;
+        height: 38px !important;
+        padding: 0 10px !important;
     }
     div.stElementContainer:has(.btn-resume-marker) + div.stElementContainer button:hover {
         background-color: #00B87C !important;
         color: #FFFFFF !important;
+    }
+
+    /* Uniformizare inaltime butoane actiuni in lista Activitate incheiata */
+    div[data-testid="stHorizontalBlock"]:has(.btn-resume-marker) div.stButton > button {
+        min-height: 38px !important;
+        height: 38px !important;
+        padding: 0 10px !important;
+        border-radius: 8px !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -791,9 +822,9 @@ def trimite_email_echipa(subiect, html_body):
     try:
         if smtp_port == 465:
             ctx = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=20)
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=5)
         else:
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=20)
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=5)
             server.starttls()
         server.login(expeditor, parola)
         server.sendmail(expeditor, destinatari_lista, msg.as_string())
@@ -910,6 +941,7 @@ TZ_RO = ZoneInfo("Europe/Bucharest")
 def acum_ro():
     return datetime.now(TZ_RO)
 
+@st.cache_resource(show_spinner=False)
 def repara_coloane_pontaj_daca_lipsesc():
     try:
         conn = get_connection()
@@ -964,10 +996,17 @@ def repara_coloane_pontaj_daca_lipsesc():
     except Exception:
         pass
 
-def insereaza_pontaj_sigur(cur, data_act, uid, cl_id, ds_id, tip_ref, desc_act, ore_luc, onor_orar, val_tot, mon, ora_st="", ora_sp=""):
-    # Detectăm coloanele reale din tabelul pontaj pentru a evita orice nepotrivire de schemă veche
+@st.cache_data(ttl=300, show_spinner=False)
+def get_coloane_pontaj_cached():
+    conn = get_connection()
+    cur = conn.cursor()
     cur.execute("SHOW COLUMNS FROM pontaj")
-    cols_db = {r["Field"]: r for r in cur.fetchall()}
+    cols = {r["Field"]: r for r in cur.fetchall()}
+    conn.close()
+    return cols
+
+def insereaza_pontaj_sigur(cur, data_act, uid, cl_id, ds_id, tip_ref, desc_act, ore_luc, onor_orar, val_tot, mon, ora_st="", ora_sp=""):
+    cols_db = get_coloane_pontaj_cached()
 
     # Dacă dosar_id nu acceptă NULL în schema veche, punem 0 în loc de None
     ds_val = ds_id
@@ -1127,6 +1166,7 @@ def executa_interogare(numar_dosar, sursa):
         return interogheaza_portal_just(numar_dosar)
 
 # --- VERIFICARE GLOBALĂ CRONOMETRU > 10 ORE LA ORICE ACCESARE ---
+@st.cache_data(ttl=30, show_spinner=False)
 def verifica_cronometre_peste_10_ore():
     try:
         acum_ts = int(acum_ro().timestamp())
