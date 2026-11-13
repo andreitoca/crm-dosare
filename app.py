@@ -1,5 +1,6 @@
 import os
 import io
+import threading
 import re
 import ssl
 import smtplib
@@ -699,12 +700,17 @@ def genereaza_raport_word_pontaj(lista_pontaje, nume_avocat_raport, filtru_clien
     return buf.getvalue()
 
 # --- CALCUL TARIF AUTOMAT PE ABONAMENT + DEPĂȘIRE ---
-def calculeaza_tarif_si_valoare_pontaj(client_id, data_activitate, ore_noi, tarif_manual, exclude_pontaj_id=None):
+def calculeaza_tarif_si_valoare_pontaj(client_id, data_activitate, ore_noi, tarif_manual, exclude_pontaj_id=None, cur_extern=None):
     an_int = data_activitate.year
     luna_int = data_activitate.month
 
-    conn = get_connection()
-    cur = conn.cursor()
+    conn_local = None
+    if cur_extern is None:
+        conn_local = get_connection()
+        cur = conn_local.cursor()
+    else:
+        cur = cur_extern
+
     cur.execute("""
         SELECT id, tip_onorariu, valoare_onorariu, tarif_depasire, numar_ore, moneda
         FROM contracte
@@ -726,7 +732,8 @@ def calculeaza_tarif_si_valoare_pontaj(client_id, data_activitate, ore_noi, tari
             WHERE client_id = %s AND YEAR(data_activitate) = %s AND MONTH(data_activitate) = %s
         """, (client_id, an_int, luna_int))
     res_ore = cur.fetchone()
-    conn.close()
+    if conn_local is not None:
+        conn_local.close()
 
     ore_anterioare = float(res_ore["ore_anterioare"]) if res_ore else 0.0
     moneda_crt = contract["moneda"] if contract and contract.get("moneda") else "RON"
@@ -775,63 +782,67 @@ def calculeaza_tarif_si_valoare_pontaj(client_id, data_activitate, ore_noi, tari
     return 0.0, 0.0, moneda_crt, None
 
 # --- FUNCȚIE TRIMITERE EMAIL GENERALĂ ---
-def trimite_email_echipa(subiect, html_body):
-    conn = get_connection()
-    cur = conn.cursor()
-    destinatari_lista = []
-
+def _worker_trimite_email_async(subiect, html_body):
     try:
-        cur.execute("SELECT email FROM utilizatori WHERE activ = 1 AND email IS NOT NULL AND email != ''")
-        for r in cur.fetchall():
-            if r.get("email"):
-                destinatari_lista.append(r["email"].strip())
-    except Exception:
-        pass
+        conn = get_connection()
+        cur = conn.cursor()
+        destinatari_lista = []
 
-    smtp_server = "toca-law.ro"
-    smtp_port = 465
-    expeditor = ""
-    parola = ""
+        try:
+            cur.execute("SELECT email FROM utilizatori WHERE activ = 1 AND email IS NOT NULL AND email != ''")
+            for r in cur.fetchall():
+                if r.get("email"):
+                    destinatari_lista.append(r["email"].strip())
+        except Exception:
+            pass
 
-    try:
-        cur.execute("SELECT smtp_server, smtp_port, email_expeditor, parola_email, email_destinatar FROM setari_email WHERE id = 1")
-        row_mail = cur.fetchone()
-        if row_mail:
-            smtp_server = row_mail.get("smtp_server") or "toca-law.ro"
-            smtp_port = int(row_mail.get("smtp_port") or 465)
-            expeditor = row_mail.get("email_expeditor") or ""
-            parola = row_mail.get("parola_email") or ""
-            if not destinatari_lista and row_mail.get("email_destinatar"):
-                destinatari_lista = [e.strip() for e in re.split(r"[,;]+", row_mail["email_destinatar"]) if e.strip()]
-    except Exception:
-        pass
+        smtp_server = "toca-law.ro"
+        smtp_port = 465
+        expeditor = ""
+        parola = ""
 
-    conn.close()
+        try:
+            cur.execute("SELECT smtp_server, smtp_port, email_expeditor, parola_email, email_destinatar FROM setari_email WHERE id = 1")
+            row_mail = cur.fetchone()
+            if row_mail:
+                smtp_server = row_mail.get("smtp_server") or "toca-law.ro"
+                smtp_port = int(row_mail.get("smtp_port") or 465)
+                expeditor = row_mail.get("email_expeditor") or ""
+                parola = row_mail.get("parola_email") or ""
+                if not destinatari_lista and row_mail.get("email_destinatar"):
+                    destinatari_lista = [e.strip() for e in re.split(r"[,;]+", row_mail["email_destinatar"]) if e.strip()]
+        except Exception:
+            pass
 
-    if not expeditor or not parola or not destinatari_lista:
-        return False, "Credențialele SMTP sau adresele echipei nu sunt configurate."
+        conn.close()
 
-    destinatari_lista = list(dict.fromkeys(destinatari_lista))
+        if not expeditor or not parola or not destinatari_lista:
+            return
 
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subiect
-    msg["From"] = f"CRM Toca Law <{expeditor}>"
-    msg["To"] = ", ".join(destinatari_lista)
-    msg.attach(MIMEText(html_body, "html", "utf-8"))
+        destinatari_lista = list(dict.fromkeys(destinatari_lista))
 
-    try:
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subiect
+        msg["From"] = f"CRM Toca Law <{expeditor}>"
+        msg["To"] = ", ".join(destinatari_lista)
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
         if smtp_port == 465:
             ctx = ssl.create_default_context()
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=5)
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=8)
         else:
-            server = smtplib.SMTP(smtp_server, smtp_port, timeout=5)
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=8)
             server.starttls()
         server.login(expeditor, parola)
         server.sendmail(expeditor, destinatari_lista, msg.as_string())
         server.quit()
-        return True, f"Alertă trimisă echipei ({', '.join(destinatari_lista)})!"
-    except Exception as e:
-        return False, f"Eroare trimitere email: {e}"
+    except Exception:
+        pass
+
+def trimite_email_echipa(subiect, html_body):
+    t = threading.Thread(target=_worker_trimite_email_async, args=(subiect, html_body), daemon=True)
+    t.start()
+    return True, "Notificarea pe email se trimite în fundal către echipă."
 
 def trimite_alerta_abonament(client_nume, serie_caj, ore_incluse, ore_lucrate, procent, prag_label, luna_curenta, tarif_depasire=0.0, moneda="EUR"):
     culoare_banner = "#D97706" if prag_label == "80%" else "#DC2626"
@@ -880,13 +891,20 @@ def trimite_alerta_cronometru_10h(avocat_nume, client_nume, descriere_act, ore_s
     </body></html>"""
     return trimite_email_echipa(subiect, html)
 
-def verifica_abonament_dupa_pontaj(client_id, data_activitate):
+def verifica_abonament_dupa_pontaj(client_id, data_activitate, conn_extern=None, cur_extern=None):
     luna_str = data_activitate.strftime("%Y-%m")
     an_int = data_activitate.year
     luna_int = data_activitate.month
 
-    conn = get_connection()
-    cur = conn.cursor()
+    conn_local = None
+    if cur_extern is None:
+        conn_local = get_connection()
+        cur = conn_local.cursor()
+        conn_ref = conn_local
+    else:
+        cur = cur_extern
+        conn_ref = conn_extern
+
     cur.execute("""
         SELECT k.id, k.serie_numar, k.numar_ore, k.tarif_depasire, k.moneda, k.alerta_80_luna, k.alerta_100_luna, c.denumire
         FROM contracte k
@@ -897,7 +915,8 @@ def verifica_abonament_dupa_pontaj(client_id, data_activitate):
     abonament = cur.fetchone()
 
     if not abonament:
-        conn.close()
+        if conn_local is not None:
+            conn_local.close()
         return []
 
     cur.execute("""
@@ -920,7 +939,8 @@ def verifica_abonament_dupa_pontaj(client_id, data_activitate):
             ore_incluse, total_ore, procent, "100%", luna_str, tarif_dep, moneda_ab
         )
         cur.execute("UPDATE contracte SET alerta_100_luna = %s, alerta_80_luna = %s WHERE id = %s", (luna_str, luna_str, abonament["id"]))
-        conn.commit()
+        if conn_ref is not None:
+            conn_ref.commit()
         mesaje_ui.append(("error", f"🚨 Plafon 100% atins/depășit pentru {abonament['denumire']} ({total_ore:.2f} / {ore_incluse:.2f} ore în {luna_str})! {msg}"))
 
     elif procent >= 80.0 and abonament.get("alerta_80_luna") != luna_str:
@@ -929,10 +949,12 @@ def verifica_abonament_dupa_pontaj(client_id, data_activitate):
             ore_incluse, total_ore, procent, "80%", luna_str, tarif_dep, moneda_ab
         )
         cur.execute("UPDATE contracte SET alerta_80_luna = %s WHERE id = %s", (luna_str, abonament["id"]))
-        conn.commit()
+        if conn_ref is not None:
+            conn_ref.commit()
         mesaje_ui.append(("warning", f"⚠️ Prag 80% atins pentru {abonament['denumire']} ({total_ore:.2f} / {ore_incluse:.2f} ore în {luna_str})! {msg}"))
 
-    conn.close()
+    if conn_local is not None:
+        conn_local.close()
     return mesaje_ui
 
 
@@ -1709,18 +1731,12 @@ elif modul_ales == "Pontaj":
                         conn = get_connection()
                         cur = conn.cursor()
 
-                        # Verificăm dacă utilizatorul există în DB; dacă nu, folosim primul utilizator activ
-                        cur.execute("SELECT id FROM utilizatori WHERE id = %s", (id_utilizator_curent,))
-                        if not cur.fetchone():
-                            cur.execute("SELECT id FROM utilizatori ORDER BY id ASC LIMIT 1")
-                            u_fallback = cur.fetchone()
-                            uid_save = u_fallback["id"] if u_fallback else 1
-                        else:
-                            uid_save = id_utilizator_curent
+                        # Folosim direct ID-ul utilizatorului selectat (deja validat din cache)
+                        uid_save = id_utilizator_curent if id_utilizator_curent else 1
 
                         if id_reluat:
                             tarif_ap, val_tot, mon_c, nota_t = calculeaza_tarif_si_valoare_pontaj(
-                                cl_id_s, dt_azi, ore_salvate, 0.0, exclude_pontaj_id=id_reluat
+                                cl_id_s, dt_azi, ore_salvate, 0.0, exclude_pontaj_id=id_reluat, cur_extern=cur
                             )
                             cur.execute("""
                                 UPDATE pontaj
@@ -1730,7 +1746,7 @@ elif modul_ales == "Pontaj":
                             """, (desc_finala, ore_salvate, tarif_ap, val_tot, mon_c, ora_stop_fmt, id_reluat))
                         else:
                             tarif_ap, val_tot, mon_c, nota_t = calculeaza_tarif_si_valoare_pontaj(
-                                cl_id_s, dt_azi, ore_salvate, 0.0
+                                cl_id_s, dt_azi, ore_salvate, 0.0, cur_extern=cur
                             )
                             insereaza_pontaj_sigur(
                                 cur, dt_azi, uid_save, cl_id_s, ds_id_s, tip_ref_activ,
@@ -1739,18 +1755,21 @@ elif modul_ales == "Pontaj":
 
                         cur.execute("DELETE FROM pontaj_activ WHERE id = %s", (cronometru_activ["id"],))
                         conn.commit()
-                        conn.close()
 
                         mesaje_rez = []
                         if nota_t:
                             mesaje_rez.append(("info", f"💶 {nota_t}"))
-                        alerte_ab = verifica_abonament_dupa_pontaj(cl_id_s, dt_azi)
+                        alerte_ab = verifica_abonament_dupa_pontaj(cl_id_s, dt_azi, conn_extern=conn, cur_extern=cur)
                         if alerte_ab:
                             mesaje_rez.extend(alerte_ab)
+                        conn.close()
+
                         if mesaje_rez:
                             st.session_state.alerte_pontaj_recente = mesaje_rez
 
-                        goleste_cache_date()
+                        # Invalidăm selectiv doar cache-ul de pontaj și contracte
+                        get_pontaj_detaliat_cached.clear()
+                        get_contracte_cached.clear()
                         st.rerun()
 
                 with c_cancel:
@@ -1868,7 +1887,8 @@ elif modul_ales == "Pontaj":
                 conn.commit()
                 conn.close()
                 verifica_abonament_dupa_pontaj(row_p["client_id"], dt_obj)
-                goleste_cache_date()
+                get_pontaj_detaliat_cached.clear()
+                get_contracte_cached.clear()
                 st.rerun()
 
         if col_cancel_ed.button("❌ Anulează", use_container_width=True):
@@ -1886,7 +1906,8 @@ elif modul_ales == "Pontaj":
             cur.execute("DELETE FROM pontaj WHERE id = %s", (p_id,))
             conn.commit()
             conn.close()
-            goleste_cache_date()
+            get_pontaj_detaliat_cached.clear()
+            get_contracte_cached.clear()
             st.rerun()
         if col_nu.button("❌ Nu, păstrează", use_container_width=True):
             st.rerun()
@@ -2093,37 +2114,32 @@ elif modul_ales == "Pontaj":
                             st.warning("Introdu cel puțin 1 minut de activitate.")
                         else:
                             dosar_id_val, tip_ref_val = optiuni_asoc_manual[asoc_aleasa_manual]
-                            tarif_aplicat, val_totala_calc, moneda_calc, nota_tarif = calculeaza_tarif_si_valoare_pontaj(
-                                cl_id_manual, dt_p, total_ore_dec, tarif_m
-                            )
-
                             repara_coloane_pontaj_daca_lipsesc()
                             conn = get_connection()
                             cur = conn.cursor()
-                            cur.execute("SELECT id FROM utilizatori WHERE id = %s", (id_utilizator_curent,))
-                            if not cur.fetchone():
-                                cur.execute("SELECT id FROM utilizatori ORDER BY id ASC LIMIT 1")
-                                u_fb = cur.fetchone()
-                                uid_m = u_fb["id"] if u_fb else 1
-                            else:
-                                uid_m = id_utilizator_curent
+                            tarif_aplicat, val_totala_calc, moneda_calc, nota_tarif = calculeaza_tarif_si_valoare_pontaj(
+                                cl_id_manual, dt_p, total_ore_dec, tarif_m, cur_extern=cur
+                            )
+                            uid_m = id_utilizator_curent if id_utilizator_curent else 1
                             insereaza_pontaj_sigur(
                                 cur, dt_p, uid_m, cl_id_manual, dosar_id_val, tip_ref_val,
                                 act_m.strip(), total_ore_dec, tarif_aplicat, val_totala_calc, moneda_calc
                             )
                             conn.commit()
-                            conn.close()
 
                             mesaje_rez = []
                             if nota_tarif:
                                 mesaje_rez.append(("info", f"💶 {nota_tarif}"))
-                            alerte_noi = verifica_abonament_dupa_pontaj(cl_id_manual, dt_p)
+                            alerte_noi = verifica_abonament_dupa_pontaj(cl_id_manual, dt_p, conn_extern=conn, cur_extern=cur)
                             if alerte_noi:
                                 mesaje_rez.extend(alerte_noi)
+                            conn.close()
+
                             if mesaje_rez:
                                 st.session_state.alerte_pontaj_recente = mesaje_rez
 
-                            goleste_cache_date()
+                            get_pontaj_detaliat_cached.clear()
+                            get_contracte_cached.clear()
                             st.success("Activitatea a fost pontată cu succes!")
                             st.rerun()
 
