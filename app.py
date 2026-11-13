@@ -914,13 +914,43 @@ def repara_coloane_pontaj_daca_lipsesc():
     try:
         conn = get_connection()
         cur = conn.cursor()
+        # Ne asigurăm că există cel puțin un utilizator în tabela utilizatori
+        try:
+            cur.execute("SELECT COUNT(*) AS cnt FROM utilizatori")
+            res_u = cur.fetchone()
+            if res_u and res_u["cnt"] == 0:
+                cur.execute("INSERT INTO utilizatori (nume, rol, activ) VALUES ('Avocat Coordonator', 'Admin', 1)")
+        except Exception:
+            pass
+
+        # Eliminăm eventuale constrângeri FOREIGN KEY vechi de pe pontaj (ex. dosar_id NOT NULL sau FK pe dosar_id/utilizator_id)
+        try:
+            cur.execute("""
+                SELECT CONSTRAINT_NAME
+                FROM information_schema.KEY_COLUMN_USAGE
+                WHERE TABLE_SCHEMA = DATABASE()
+                  AND TABLE_NAME = 'pontaj'
+                  AND REFERENCED_TABLE_NAME IS NOT NULL
+            """)
+            for fk_row in cur.fetchall():
+                fk_name = fk_row.get("CONSTRAINT_NAME")
+                if fk_name:
+                    try:
+                        cur.execute(f"ALTER TABLE pontaj DROP FOREIGN KEY `{fk_name}`")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
         for stmt in [
             "ALTER TABLE pontaj ADD COLUMN tip_referinta VARCHAR(255) DEFAULT 'Consultanță curentă'",
             "ALTER TABLE pontaj ADD COLUMN valoare_totala DECIMAL(12,2) DEFAULT 0.0",
             "ALTER TABLE pontaj ADD COLUMN moneda VARCHAR(20) DEFAULT 'RON'",
             "ALTER TABLE pontaj ADD COLUMN ora_start VARCHAR(10) DEFAULT ''",
             "ALTER TABLE pontaj ADD COLUMN ora_stop VARCHAR(10) DEFAULT ''",
-            "ALTER TABLE pontaj MODIFY COLUMN dosar_id INT NULL",
+            "ALTER TABLE pontaj MODIFY COLUMN dosar_id INT NULL DEFAULT NULL",
+            "ALTER TABLE pontaj MODIFY COLUMN utilizator_id INT NULL DEFAULT 1",
+            "ALTER TABLE pontaj MODIFY COLUMN client_id INT NULL",
             "ALTER TABLE pontaj_activ ADD COLUMN tip_referinta VARCHAR(255) DEFAULT 'Consultanță curentă'",
             "ALTER TABLE pontaj_activ ADD COLUMN offset_secunde BIGINT DEFAULT 0",
             "ALTER TABLE pontaj_activ ADD COLUMN pontaj_id_reluat INT NULL",
@@ -933,6 +963,36 @@ def repara_coloane_pontaj_daca_lipsesc():
         conn.close()
     except Exception:
         pass
+
+def insereaza_pontaj_sigur(cur, data_act, uid, cl_id, ds_id, tip_ref, desc_act, ore_luc, onor_orar, val_tot, mon, ora_st="", ora_sp=""):
+    # Detectăm coloanele reale din tabelul pontaj pentru a evita orice nepotrivire de schemă veche
+    cur.execute("SHOW COLUMNS FROM pontaj")
+    cols_db = {r["Field"]: r for r in cur.fetchall()}
+
+    # Dacă dosar_id nu acceptă NULL în schema veche, punem 0 în loc de None
+    ds_val = ds_id
+    if ds_val is None and "dosar_id" in cols_db and cols_db["dosar_id"].get("Null") == "NO":
+        ds_val = 0
+
+    cand_data = {
+        "data_activitate": data_act,
+        "utilizator_id": uid,
+        "client_id": cl_id,
+        "dosar_id": ds_val,
+        "tip_referinta": tip_ref,
+        "descriere_activitate": desc_act,
+        "ore_lucrate": ore_luc,
+        "onorariu_orar": onor_orar,
+        "valoare_totala": val_tot,
+        "moneda": mon,
+        "ora_start": ora_st,
+        "ora_stop": ora_sp,
+    }
+    cols_prezente = [k for k in cand_data.keys() if k in cols_db]
+    placeholders = ", ".join(["%s"] * len(cols_prezente))
+    cols_sql = ", ".join(cols_prezente)
+    vals = [cand_data[k] for k in cols_prezente]
+    cur.execute(f"INSERT INTO pontaj ({cols_sql}) VALUES ({placeholders})", tuple(vals))
 
 WSDL_URL = "http://portalquery.just.ro/Query.asmx?WSDL"
 
@@ -1632,16 +1692,10 @@ elif modul_ales == "Pontaj":
                             tarif_ap, val_tot, mon_c, nota_t = calculeaza_tarif_si_valoare_pontaj(
                                 cl_id_s, dt_azi, ore_salvate, 0.0
                             )
-                            cur.execute("""
-                                INSERT INTO pontaj (
-                                    data_activitate, utilizator_id, client_id, dosar_id, tip_referinta,
-                                    descriere_activitate, ore_lucrate, onorariu_orar, valoare_totala, moneda, ora_start, ora_stop
-                                )
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """, (
-                                dt_azi, uid_save, cl_id_s, ds_id_s, tip_ref_activ,
+                            insereaza_pontaj_sigur(
+                                cur, dt_azi, uid_save, cl_id_s, ds_id_s, tip_ref_activ,
                                 desc_finala, ore_salvate, tarif_ap, val_tot, mon_c, ora_pornire_fmt, ora_stop_fmt
-                            ))
+                            )
 
                         cur.execute("DELETE FROM pontaj_activ WHERE id = %s", (cronometru_activ["id"],))
                         conn.commit()
@@ -2013,13 +2067,10 @@ elif modul_ales == "Pontaj":
                                 uid_m = u_fb["id"] if u_fb else 1
                             else:
                                 uid_m = id_utilizator_curent
-                            cur.execute("""
-                                INSERT INTO pontaj (
-                                    data_activitate, utilizator_id, client_id, dosar_id, tip_referinta,
-                                    descriere_activitate, ore_lucrate, onorariu_orar, valoare_totala, moneda
-                                )
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                            """, (dt_p, uid_m, cl_id_manual, dosar_id_val, tip_ref_val, act_m.strip(), total_ore_dec, tarif_aplicat, val_totala_calc, moneda_calc))
+                            insereaza_pontaj_sigur(
+                                cur, dt_p, uid_m, cl_id_manual, dosar_id_val, tip_ref_val,
+                                act_m.strip(), total_ore_dec, tarif_aplicat, val_totala_calc, moneda_calc
+                            )
                             conn.commit()
                             conn.close()
 
