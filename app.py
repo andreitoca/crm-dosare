@@ -147,17 +147,29 @@ st.markdown("""
         font-size: 13px !important;
     }
 
-    /* Aliniere perfectă pe rând a butoanelor ✏️ și 🗑️ în tabelele Clienți și Contracte CAJ */
+    /* Aliniere perfectă pe rând a textului și butoanelor ✏️ și 🗑️ în tabelele Clienți și Contracte CAJ */
     div[data-testid="stHorizontalBlock"]:has(.row-action-marker) {
         align-items: center !important;
     }
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) > div[data-testid="stColumn"] {
+        display: flex !important;
+        flex-direction: column !important;
+        justify-content: center !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div[data-testid="stMarkdownContainer"] p {
+        margin: 0 !important;
+        padding: 0 !important;
+        line-height: 1.3 !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div.stButton {
+        margin: 0 !important;
+    }
     div[data-testid="stHorizontalBlock"]:has(.row-action-marker) div.stButton > button {
-        height: 34px !important;
-        min-height: 34px !important;
+        height: 32px !important;
+        min-height: 32px !important;
         padding: 0 8px !important;
         border-radius: 8px !important;
-        margin-top: 0 !important;
-        margin-bottom: 0 !important;
+        margin: 0 !important;
         display: inline-flex !important;
         align-items: center !important;
         justify-content: center !important;
@@ -1579,12 +1591,12 @@ elif modul_ales == "Clienți":
                 h_cl_cols = st.columns(cl_widths)
                 for col_h, txt_h in zip(h_cl_cols, cl_headers):
                     col_h.markdown(
-                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{txt_h}</div>",
+                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{txt_h if txt_h else '&nbsp;'}</div>",
                         unsafe_allow_html=True
                     )
 
                 for idx_c, c in enumerate(clienti_raw, start=1):
-                    r_cl_cols = st.columns(cl_widths)
+                    r_cl_cols = st.columns(cl_widths, vertical_alignment="center")
                     vals_cl = [
                         str(idx_c),
                         c["denumire"] or "-",
@@ -1597,7 +1609,7 @@ elif modul_ales == "Clienți":
                     ]
                     for col_r, val_r in zip(r_cl_cols[:-2], vals_cl):
                         col_r.markdown(
-                            f"<div style='font-size:13px; color:#0F172A; padding-top:4px;'>{val_r}</div>",
+                            f"<div style='font-size:13px; color:#0F172A; display:flex; align-items:center; min-height:32px; line-height:1.3;'>{val_r}</div>",
                             unsafe_allow_html=True
                         )
 
@@ -1883,7 +1895,7 @@ elif modul_ales == "Clienți":
                 h_cols = st.columns(widths)
                 for col_h, text_h in zip(h_cols, headers):
                     col_h.markdown(
-                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{text_h}</div>",
+                        f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{text_h if text_h else '&nbsp;'}</div>",
                         unsafe_allow_html=True
                     )
 
@@ -1922,7 +1934,7 @@ elif modul_ales == "Clienți":
                     else:
                         aa_summary = "-"
 
-                    r_cols = st.columns(widths)
+                    r_cols = st.columns(widths, vertical_alignment="center")
                     valori_rand = [
                         str(idx_k),
                         r["serie_numar"],
@@ -1938,7 +1950,7 @@ elif modul_ales == "Clienți":
                     ]
                     for col_r, val_r in zip(r_cols[:-2], valori_rand):
                         col_r.markdown(
-                            f"<div style='font-size:13px; color:#0F172A; padding-top:4px;'>{val_r}</div>",
+                            f"<div style='font-size:13px; color:#0F172A; display:flex; align-items:center; min-height:32px; line-height:1.3;'>{val_r}</div>",
                             unsafe_allow_html=True
                         )
 
