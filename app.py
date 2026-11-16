@@ -300,7 +300,7 @@ if modul_ales == "Sarcini":
     clienti_map = {c["denumire"]: c["id"] for c in clienti_raw} if clienti_raw else {}
 
     with st.container(border=True):
-        st.markdown("<span class='gold-box-marker'></span>", unsafe_allow_html=True)
+        st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
         with st.expander("➕ Adaugă Sarcină Nouă în Calendar", expanded=False):
             with st.form("form_add_sarcină_calendar", clear_on_submit=True):
                 c1, c2, c3 = st.columns([2, 1, 1])
@@ -394,4 +394,87 @@ if modul_ales == "Sarcini":
     filtru_status = fc1.selectbox("Filtrează după status:", ["Toate", "În lucru", "Finalizat"])
     filtru_avocat = fc2.selectbox("Filtrează după responsabil:", ["Toată echipa", utilizator_selectat] + [u for u in user_dict.keys() if u != utilizator_selectat])
     
-    luni_ro = {1: "Ianuarie", 2: "Februarie", 3: "Martie", 4: "Aprilie", 5: "Mai", 6: "Iunie", 7: "Iulie", 8: "August", 9:
+    luni_ro = {1: "Ianuarie", 2: "Februarie", 3: "Martie", 4: "Aprilie", 5: "Mai", 6: "Iunie", 7: "Iulie", 8: "August", 9: "Septembrie", 10: "Octombrie", 11: "Noiembrie", 12: "Decembrie"}
+    luna_selectata = fc3.selectbox("Lună calendar:", list(luni_ro.values()), index=date.today().month - 1)
+    luna_nr = [k for k, v in luni_ro.items() if v == luna_selectata][0]
+
+    sarcini_filtrate = []
+    for s in sarcini_toate:
+        dt_s = s["termen_limita"]
+        if isinstance(dt_s, str):
+            dt_s = datetime.strptime(dt_s, "%Y-%m-%d").date()
+        if dt_s.month != luna_nr:
+            continue
+        if filtru_status != "Toate" and s["status"] != filtru_status:
+            continue
+        if filtru_avocat != "Toată echipa" and s["responsabil_nume"] != filtru_avocat:
+            continue
+        sarcini_filtrate.append((s, dt_s))
+
+    # --- PANOU EXPORT RAPORT SARCINI (WORD) ---
+    with st.expander("📄 Generează Raport Sarcini (Format Word .docx)", expanded=False):
+        if not DOCX_DISPONIBIL:
+            st.warning("Librăria `python-docx` nu este instalată pe server.")
+        else:
+            s_word_list = [s[0] for s in sarcini_filtrate]
+            if s_word_list:
+                docx_bytes = genereaza_raport_sarcini_docx(s_word_list, filtru_status, filtru_avocat)
+                st.download_button(
+                    label=f"⬇️ Descarcă Raport Word Sarcini ({len(s_word_list)} înregistrări)",
+                    data=docx_bytes,
+                    file_name=f"Raport_Sarcini_{luna_selectata}_{filtru_status}.docx",
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    type="primary"
+                )
+            else:
+                st.info("Nu există sarcini pentru criteriile selectate.")
+
+    if sarcini_filtrate:
+        sarcini_filtrate.sort(key=lambda x: x[1])
+        zile_grupate = {}
+        for s, dt in sarcini_filtrate:
+            zile_grupate.setdefault(dt, []).append(s)
+
+        for zi_dt, lista_s in zile_grupate.items():
+            zi_str = zi_dt.strftime("%d.%m.%Y (%A)")
+            st.markdown(f"""
+                <div style='background-color:#F1F5F9; padding:8px 14px; border-radius:6px; margin-top:14px; margin-bottom:6px; display:flex; justify-content:space-between; align-items:center;'>
+                    <span style='font-weight:700; color:#1E3A8A; font-size:14px;'>📅 {zi_str}</span>
+                    <span style='font-weight:600; color:#334155; font-size:13px;'>{len(lista_s)} sarcini programate</span>
+                </div>
+            """, unsafe_allow_html=True)
+
+            for s_item in lista_s:
+                sc_desc, sc_meta, sc_fin, sc_ed, sc_del = st.columns([3.8, 2.2, 1.2, 0.45, 0.45], vertical_alignment="center")
+                with sc_desc:
+                    st.markdown(f"""
+                        <div style='font-size:14px; font-weight:600; color:#0F172A;'>{s_item['titlu']}</div>
+                        <div style='font-size:12px; color:#64748B;'>{s_item['descriere'] or 'Fără descriere'}</div>
+                    """, unsafe_allow_html=True)
+                with sc_meta:
+                    st.markdown(f"""
+                        <div style='font-size:12px; color:#334155;'>👤 <strong>{s_item['responsabil_nume']}</strong></div>
+                        <div style='font-size:11px; color:#64748B;'>🏢 {s_item['client_nume']} • 📁 {s_item['dosar_nume']}</div>
+                    """, unsafe_allow_html=True)
+                with sc_fin:
+                    if s_item["status"] != "Finalizat":
+                        if st.button("✔ Finalizat", key=f"fin_s_{s_item['id']}", help="Marchează sarcina ca finalizată"):
+                            conn = get_connection()
+                            cur = conn.cursor()
+                            cur.execute("UPDATE sarcini SET status = 'Finalizat' WHERE id = %s", (s_item["id"],))
+                            conn.commit()
+                            conn.close()
+                            goleste_cache_sarcini()
+                            st.rerun()
+                    else:
+                        st.markdown("<div style='font-size:12px; color:#059669; font-weight:700; padding-top:6px;'>✅ Finalizat</div>", unsafe_allow_html=True)
+                with sc_ed:
+                    if st.button("✏️", key=f"edit_s_{s_item['id']}", help="Modifică sarcina"):
+                        dialog_editeaza_sarcina(s_item)
+                with sc_del:
+                    if st.button("🗑️", key=f"del_s_{s_item['id']}", help="Șterge sarcina"):
+                        dialog_sterge_sarcina(s_item["id"], s_item["titlu"])
+
+                st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
+    else:
+        st.info(f"Nicio sarcină înregistrată pentru luna {luna_selectata} cu filtrele selectate.")
