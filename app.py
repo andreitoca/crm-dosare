@@ -1,6 +1,94 @@
-# --- VIZUALIZARE KANBAN COLORATĂ PENTRU SARCINI / DOSARE ---
+import os
+import io
+import threading
+import re
+import ssl
+import smtplib
+import base64
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+import streamlit as st
+import streamlit.components.v1 as components
+import pandas as pd
+from zoneinfo import ZoneInfo
+from datetime import datetime, date
+from zeep import Client
+from playwright.sync_api import sync_playwright
+from db_config import get_connection
+
+try:
+    from docx import Document
+    from docx.shared import Inches, Pt, RGBColor
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    DOCX_DISPONIBIL = True
+except ImportError:
+    DOCX_DISPONIBIL = False
+
+st.set_page_config(page_title="CRM Toca Law", page_icon="⚖️", layout="wide")
+
+# --- STILIZARE MENIU LATERAL & ELEMENTE ---
 st.markdown("""
 <style>
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #FFFFFF 0px, #FFFFFF 185px, #1E3A8A 185px, #1E3A8A 100%) !important;
+        border-right: 1px solid #CBD5E1 !important;
+        min-width: 215px !important;
+        max-width: 235px !important;
+    }
+    section[data-testid="stSidebar"] > div:first-child {
+        padding: 16px 14px !important;
+        background: transparent !important;
+    }
+    section[data-testid="stSidebar"] div[data-baseweb="select"] > div {
+        background-color: #F8FAFC !important;
+        border: 1px solid #CBD5E1 !important;
+        border-radius: 8px !important;
+        color: #0F172A !important;
+        font-size: 13px !important;
+        font-weight: 600 !important;
+        margin-bottom: 18px !important;
+    }
+    section[data-testid="stSidebar"] div.stButton > button {
+        width: 100% !important;
+        border-radius: 10px !important;
+        padding: 12px 10px !important;
+        font-weight: 600 !important;
+        font-size: 13px !important;
+        transition: all 0.2s ease !important;
+        display: flex !important;
+        flex-direction: column !important;
+        align-items: center !important;
+        justify-content: center !important;
+        gap: 6px !important;
+    }
+    section[data-testid="stSidebar"] div.stButton > button[kind="secondary"] {
+        background-color: rgba(255, 255, 255, 0.08) !important;
+        border: 1px solid rgba(255, 255, 255, 0.28) !important;
+        color: #FFFFFF !important;
+    }
+    section[data-testid="stSidebar"] div.stButton > button[kind="secondary"]:hover {
+        background-color: rgba(255, 255, 255, 0.18) !important;
+        border-color: rgba(255, 255, 255, 0.55) !important;
+        color: #FFFFFF !important;
+    }
+    section[data-testid="stSidebar"] div.stButton > button[kind="primary"] {
+        background-color: #00B87C !important;
+        border: 1px solid #00B87C !important;
+        color: #FFFFFF !important;
+        box-shadow: 0 3px 10px rgba(0, 184, 124, 0.35) !important;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"]:has(.gold-box-marker) {
+        border: 2.5px solid #D4AF37 !important;
+        border-radius: 12px !important;
+        background: linear-gradient(180deg, #FFFDF5 0%, #FFFFFF 100%) !important;
+        box-shadow: 0 4px 16px rgba(212, 175, 55, 0.28) !important;
+        padding: 16px 20px !important;
+        margin-bottom: 18px !important;
+    }
+    div.stElementContainer:has(.gold-box-marker) {
+        display: none !important;
+        height: 0 !important;
+    }
     .kanban-col {
         background-color: #F8FAFC;
         border-radius: 10px;
@@ -19,48 +107,133 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown("### 🗂️ Panou Kanban - Stadiul Activităților și Sarcinilor")
+@st.cache_data(show_spinner=False)
+def incarca_resurse_vizuale():
+    def to_css_url(filename):
+        if os.path.exists(filename):
+            with open(filename, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode()
+            return f'url("data:image/png;base64,{b64}")'
+        return "none"
+    icons = {
+        "dosare": to_css_url("File.png"),
+        "clienti": to_css_url("Mood Dollar.png"),
+        "pontaj": to_css_url("Alarm.png"),
+        "sarcini": to_css_url("Clipboard.png"),
+        "cautare": to_css_url("Zoom Check.png"),
+    }
+    logo_html = ""
+    for ext in ["", ".png", ".jpg", ".jpeg", ".webp"]:
+        nume_fisier = f"220420_[1000xpx]_LOGO_AT{ext}"
+        if os.path.exists(nume_fisier):
+            with open(nume_fisier, "rb") as img_f:
+                b64_logo = base64.b64encode(img_f.read()).decode()
+            logo_html = f'<div style="background-color:#FFFFFF; padding:8px 6px; text-align:center; margin-bottom:10px;"><img src="data:image/png;base64,{b64_logo}" style="max-width:100%; height:auto; display:block; margin:0 auto;" /></div>'
+            break
+    return icons, logo_html
 
-# Definim stările și culorile asociate tab-ului cardului / antetului
-stari_kanban = {
-    "Nou": {"culoare": "#F472B6", "nume": "Nou"},          # Roz
-    "În lucru": {"culoare": "#FACC15", "nume": "În lucru"},  # Galben
-    "Pe rol": {"culoare": "#94A3B8", "nume": "Pe rol"},      # Gri deschis
-    "Așteptare": {"culoare": "#38BDF8", "nume": "Așteptare"},# Albastru
-    "Finalizat": {"culoare": "#4ADE80", "nume": "Finalizat"},# Verde
-    "Renunțări": {"culoare": "#F87171", "nume": "Renunțări"} # Roșu
-}
+@st.cache_resource(show_spinner=False)
+def asigura_structura_db():
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sarcini (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                titlu VARCHAR(255),
+                descriere TEXT,
+                termen_limita DATE,
+                ora_limita VARCHAR(20) DEFAULT '16:00',
+                atribuit_lui INT DEFAULT 1,
+                creat_de INT DEFAULT 1,
+                client_id INT NULL,
+                dosar_id INT NULL,
+                prioritate VARCHAR(50) DEFAULT 'Normală',
+                status VARCHAR(50) DEFAULT 'În lucru'
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+    return True
 
-cols_kanban = st.columns(len(stari_kanban))
+asigura_structura_db()
 
-# Preluăm sarcinile sau dosarele din baza de date
-sarcini_kanban = get_sarcini_detaliate_cached()
+@st.cache_data(ttl=60, show_spinner=False)
+def get_utilizatori_cached():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, nume, rol FROM utilizatori WHERE activ = 1 ORDER BY id ASC")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
-for idx, (stare_cheie, config) in enumerate(stari_kanban.items()):
-    with cols_kanban[idx]:
-        # Antetul coloanei colorat
-        st.markdown(f"""
-            <div style="background-color: {config['culoare']}; color: #0F172A; font-weight: 700; text-align: center; padding: 8px; border-radius: 6px 6px 0 0; font-size: 13px;">
-                {config['nume']}
-            </div>
-        """, unsafe_allow_html=True)
-        
-        st.markdown('<div class="kanban-col">', unsafe_allow_html=True)
-        
-        # Filtrăm elementele pentru starea curentă (mapăm statusul existent sau folosim un status implicit)
-        elemente_stare = [s for s in sarcini_kanban if s.get("status", "În lucru") == stare_cheie or (stare_cheie == "În lucru" and s.get("status") == "În lucru")]
-        
-        if not elemente_stare:
-            st.markdown("<p style='font-size: 12px; color: #94A3B8; text-align: center; margin-top: 20px;'>Niciun element</p>", unsafe_allow_html=True)
-        
-        for item in elemente_stare:
-            st.markdown(f"""
-                <div class="kanban-card">
-                    <div style="font-weight: 700; font-size: 13px; color: #1E3A8A;">{item.get('titlu', 'Fără titlu')}</div>
-                    <div style="font-size: 11px; color: #475569; margin-top: 4px;">👤 {item.get('responsabil_nume', '-')}</div>
-                    <div style="font-size: 11px; color: #64748B;">🏢 {item.get('client_nume', '-')}</div>
-                    <div style="font-size: 10px; color: #94A3B8; margin-top: 6px;">📅 {item.get('termen_limita', '-')}</div>
-                </div>
-            """, unsafe_allow_html=True)
-            
-        st.markdown('</div>', unsafe_allow_html=True)
+@st.cache_data(ttl=60, show_spinner=False)
+def get_clienti_cached():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_dosare_client_cached(client_id):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT id, numar_dosar, obiect FROM dosare WHERE client_id = %s ORDER BY id DESC", (client_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+@st.cache_data(ttl=60, show_spinner=False)
+def get_sarcini_detaliate_cached():
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT
+            s.id,
+            s.titlu,
+            s.descriere,
+            s.termen_limita,
+            s.ora_limita,
+            s.prioritate,
+            s.status,
+            s.atribuit_lui,
+            u.nume AS responsabil_nume,
+            s.client_id,
+            COALESCE(c.denumire, '-') AS client_nume,
+            s.dosar_id,
+            COALESCE(d.numar_dosar, 'Consultanță generală') AS dosar_nume
+        FROM sarcini s
+        JOIN utilizatori u ON s.atribuit_lui = u.id
+        LEFT JOIN clienti c ON s.client_id = c.id
+        LEFT JOIN dosare d ON s.dosar_id = d.id
+        ORDER BY s.termen_limita ASC, s.id DESC
+    """)
+    rows = cur.fetchall()
+    conn.close()
+    return rows
+
+def goleste_cache_sarcini():
+    get_sarcini_detaliate_cached.clear()
+
+# --- GENERARE RAPORT WORD SARCINI ---
+def genereaza_raport_sarcini_docx(sarcini_lista, status_filtru, avocat_filtru):
+    doc = Document()
+    for section in doc.sections:
+        section.top_margin = Inches(0.75)
+        section.bottom_margin = Inches(0.75)
+        section.left_margin = Inches(0.75)
+        section.right_margin = Inches(0.75)
+
+    p_b = doc.add_paragraph()
+    r_b = p_b.add_run(f"TOCA LAW • RAPORT SARCINI ({status_filtru.upper()})")
+    r_b.bold = True
+    r_b.font.size = Pt(14)
+    r_b.font.color.rgb = RGBColor(0x1E, 0x3A, 0x8A)
+
+    p_m = doc.add_paragraph()
+    p_m.paragraph_format.space_after = Pt(12)
+    p_m.add_run(f"Responsabil: {avocat
