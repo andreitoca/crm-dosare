@@ -149,7 +149,7 @@ def asigura_structura_db():
                 client_id INT NULL,
                 dosar_id INT NULL,
                 prioritate VARCHAR(50) DEFAULT 'Normală',
-                status VARCHAR(50) DEFAULT 'În lucru'
+                status VARCHAR(50) DEFAULT 'Nou'
             )
         """)
         conn.commit()
@@ -173,67 +173,4 @@ def get_utilizatori_cached():
 def get_clienti_cached():
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC")
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-@st.cache_data(ttl=60, show_spinner=False)
-def get_dosare_client_cached(client_id):
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT id, numar_dosar, obiect FROM dosare WHERE client_id = %s ORDER BY id DESC", (client_id,))
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-@st.cache_data(ttl=60, show_spinner=False)
-def get_sarcini_detaliate_cached():
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT
-            s.id,
-            s.titlu,
-            s.descriere,
-            s.termen_limita,
-            s.ora_limita,
-            s.prioritate,
-            s.status,
-            s.atribuit_lui,
-            u.nume AS responsabil_nume,
-            s.client_id,
-            COALESCE(c.denumire, '-') AS client_nume,
-            s.dosar_id,
-            COALESCE(d.numar_dosar, 'Consultanță generală') AS dosar_nume
-        FROM sarcini s
-        JOIN utilizatori u ON s.atribuit_lui = u.id
-        LEFT JOIN clienti c ON s.client_id = c.id
-        LEFT JOIN dosare d ON s.dosar_id = d.id
-        ORDER BY s.termen_limita ASC, s.id DESC
-    """)
-    rows = cur.fetchall()
-    conn.close()
-    return rows
-
-def goleste_cache_sarcini():
-    get_sarcini_detaliate_cached.clear()
-
-# --- GENERARE RAPORT WORD SARCINI ---
-def genereaza_raport_sarcini_docx(sarcini_lista, status_filtru, avocat_filtru):
-    doc = Document()
-    for section in doc.sections:
-        section.top_margin = Inches(0.75)
-        section.bottom_margin = Inches(0.75)
-        section.left_margin = Inches(0.75)
-        section.right_margin = Inches(0.75)
-
-    p_b = doc.add_paragraph()
-    r_b = p_b.add_run(f"TOCA LAW • RAPORT SARCINI ({status_filtru.upper()})")
-    r_b.bold = True
-    r_b.font.size = Pt(14)
-    r_b.font.color.rgb = RGBColor(0x1E, 0x3A, 0x8A)
-
-    p_m = doc.add_paragraph()
-    p_m.paragraph_format.space_after = Pt(12)
-    p_m.add_run(f"Responsabil: {avocat
+    cur.execute("SELECT id, denumire FROM clienti ORDER BY denumire ASC
