@@ -303,11 +303,11 @@ for idx_m, nume_modul in enumerate(optiuni_meniu, start=1):
 
 modul_ales = st.session_state.modul_ales
 
-# === MODUL SARCINI & KANBAN COLORAT ===
+# === MODUL SARCINI & STADIU ACTIVITĂȚI ===
 if modul_ales == "Sarcini":
     st.markdown("""
         <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
-            <h2 style="margin: 0; font-size: 22px; color: white;">📌 Panou Kanban & Sarcini În Timp Real</h2>
+            <h2 style="margin: 0; font-size: 22px; color: white;">📌 Sarcini În Timp Real</h2>
         </div>
     """, unsafe_allow_html=True)
 
@@ -400,8 +400,8 @@ if modul_ales == "Sarcini":
         if c_d2.button("❌ Nu", use_container_width=True):
             st.rerun()
 
-    # --- KANBAN VIEW COLORAT ---
-    st.markdown("### 🗂️ Panou Kanban - Stadiul Activităților și Sarcinilor")
+    # --- VIZUALIZARE STADIU ACTIVITĂȚI (KABAN COLORAT) ---
+    st.markdown("### 📁 Stadiul Activităților și Sarcinilor")
     
     stari_kanban = {
         "Nou": {"culoare": "#F472B6", "nume": "Nou"},          # Roz
