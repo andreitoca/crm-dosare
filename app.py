@@ -6,6 +6,7 @@ import re
 import ssl
 import smtplib
 import base64
+import hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import streamlit as st
@@ -253,7 +254,8 @@ st.markdown("""
     div.stElementContainer:has(.timer-gold-marker),
     div.stElementContainer:has(.manual-gold-marker),
     div.stElementContainer:has(.gold-box-marker),
-    div.stElementContainer:has(.row-action-marker) {
+    div.stElementContainer:has(.row-action-marker),
+    div.stElementContainer:has(.sarcina-actions-marker) {
         display: none !important;
         height: 0 !important;
         margin: 0 !important;
@@ -299,9 +301,52 @@ st.markdown("""
         border-radius: 8px;
         padding: 10px 12px;
         margin-top: 8px;
-        margin-bottom: 6px;
+        margin-bottom: 4px;
         box-shadow: 0 2px 5px rgba(15, 23, 42, 0.06);
         border: 1px solid #CBD5E1;
+    }
+
+    /* Bara de butoane compactă și simetrică sub fiecare card de sarcină */
+    div[data-testid="stHorizontalBlock"]:has(.sarcina-actions-marker) {
+        gap: 6px !important;
+        margin-top: 2px !important;
+        margin-bottom: 10px !important;
+        align-items: center !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.sarcina-actions-marker) > div[data-testid="stColumn"] {
+        padding: 0 !important;
+        min-width: 0 !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.sarcina-actions-marker) div.stButton > button,
+    div[data-testid="stHorizontalBlock"]:has(.sarcina-actions-marker) button[data-testid="stBaseButton-secondary"] {
+        height: 30px !important;
+        min-height: 30px !important;
+        max-height: 30px !important;
+        padding: 0 6px !important;
+        font-size: 12px !important;
+        line-height: 1 !important;
+        border-radius: 6px !important;
+        border: 1px solid #CBD5E1 !important;
+        background-color: #FFFFFF !important;
+        margin: 0 !important;
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }
+    /* Stil discret verde pentru primul buton (✅ Finalizat) din bara cardului */
+    div[data-testid="stHorizontalBlock"]:has(.sarcina-actions-marker) > div[data-testid="stColumn"]:first-child div.stButton > button {
+        background-color: #ECFDF5 !important;
+        border-color: #10B981 !important;
+        color: #047857 !important;
+        font-weight: 600 !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.sarcina-actions-marker) > div[data-testid="stColumn"]:first-child div.stButton > button:hover {
+        background-color: #10B981 !important;
+        color: #FFFFFF !important;
+    }
+    div[data-testid="stHorizontalBlock"]:has(.sarcina-actions-marker) > div[data-testid="stColumn"]:not(:first-child) div.stButton > button:hover {
+        border-color: #D4AF37 !important;
+        background-color: #FFFDF5 !important;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -345,6 +390,43 @@ def asigura_structura_db_o_data():
     try:
         conn = get_connection()
         cur = conn.cursor()
+
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS utilizatori (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                nume VARCHAR(255) NOT NULL,
+                email VARCHAR(255) DEFAULT '',
+                parola_hash VARCHAR(255) DEFAULT '',
+                rol VARCHAR(50) DEFAULT 'Avocat',
+                activ TINYINT(1) DEFAULT 1
+            )
+        """)
+        for nume_col, tip_col in [
+            ("email", "VARCHAR(255) DEFAULT ''"),
+            ("parola_hash", "VARCHAR(255) DEFAULT ''"),
+            ("rol", "VARCHAR(50) DEFAULT 'Avocat'"),
+            ("activ", "TINYINT(1) DEFAULT 1")
+        ]:
+            try:
+                cur.execute(f"ALTER TABLE utilizatori ADD COLUMN {nume_col} {tip_col}")
+            except Exception:
+                pass
+
+        try:
+            cur.execute("UPDATE utilizatori SET rol = 'Administrator' WHERE rol = 'Administrator'")
+            cur.execute("UPDATE utilizatori SET rol = 'Avocat colaborator' WHERE rol = 'Avocat'")
+        except Exception:
+            pass
+
+        cur.execute("SELECT COUNT(*) AS cnt FROM utilizatori")
+        if cur.fetchone()["cnt"] == 0:
+            cur.execute(
+                "INSERT INTO utilizatori (nume, email, parola_hash, rol, activ) VALUES ('Avocat Coordonator', 'admin@toca-law.ro', '', 'Administrator', 1)"
+            )
+        else:
+            cur.execute("SELECT COUNT(*) AS cnt_adm FROM utilizatori WHERE rol = 'Administrator' AND activ = 1")
+            if cur.fetchone()["cnt_adm"] == 0:
+                cur.execute("UPDATE utilizatori SET rol = 'Administrator' ORDER BY id ASC LIMIT 1")
 
         cur.execute("""
             CREATE TABLE IF NOT EXISTS clienti (
@@ -499,10 +581,13 @@ asigura_structura_db_o_data()
 
 # --- 3. FUNCȚII DE CITIRE CU CACHE ---
 @st.cache_data(ttl=60, show_spinner=False)
-def get_utilizatori_cached():
+def get_utilizatori_cached(include_inactivi=False):
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id, nume, rol FROM utilizatori WHERE activ = 1 ORDER BY id ASC")
+    if include_inactivi:
+        cur.execute("SELECT id, nume, COALESCE(email, '') AS email, COALESCE(rol, 'Avocat colaborator') AS rol, activ, COALESCE(parola_hash, '') AS parola_hash FROM utilizatori ORDER BY id ASC")
+    else:
+        cur.execute("SELECT id, nume, COALESCE(email, '') AS email, COALESCE(rol, 'Avocat colaborator') AS rol, activ, COALESCE(parola_hash, '') AS parola_hash FROM utilizatori WHERE activ = 1 ORDER BY id ASC")
     rows = cur.fetchall()
     conn.close()
     return rows
@@ -1166,7 +1251,7 @@ def repara_coloane_pontaj_daca_lipsesc():
             cur.execute("SELECT COUNT(*) AS cnt FROM utilizatori")
             res_u = cur.fetchone()
             if res_u and res_u["cnt"] == 0:
-                cur.execute("INSERT INTO utilizatori (nume, rol, activ) VALUES ('Avocat Coordonator', 'Admin', 1)")
+                cur.execute("INSERT INTO utilizatori (nume, rol, activ) VALUES ('Avocat Coordonator', 'Administrator', 1)")
         except Exception:
             pass
 
@@ -1485,7 +1570,16 @@ def verifica_cronometre_peste_10_ore():
 
 alerte_10h_globale = verifica_cronometre_peste_10_ore()
 
-# --- BARA LATERALĂ & NAVIGARE ---
+# --- AUTENTIFICARE & SECURITATE PAROLE ---
+def hash_parola(parola_clara):
+    salt = "TocaLawCRM_2026_Salt!"
+    return hashlib.sha256((salt + (parola_clara or "")).encode("utf-8")).hexdigest()
+
+def verifica_parola(parola_clara, parola_hash_db):
+    if not parola_hash_db:
+        return False
+    return hash_parola(parola_clara) == parola_hash_db
+
 icons_css, logo_html = incarca_resurse_vizuale()
 
 st.markdown(f"""
@@ -1500,26 +1594,128 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
+useri_db = get_utilizatori_cached()
+exista_parole_setate = any(bool(u.get("parola_hash")) for u in useri_db)
+
+if "auth_user" not in st.session_state:
+    st.session_state.auth_user = None
+
+if not exista_parole_setate:
+    col_l1, col_l2, col_l3 = st.columns([1, 1.4, 1])
+    with col_l2:
+        if logo_html:
+            st.markdown(logo_html, unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
+            st.markdown("### 🔐 Configurare Inițială Cont Administrator")
+            st.info("Bine ai venit! Setează adresa de email și parola contului principal de **Administrator (Acces Total)**. Ulterior, din meniul **Utilizatori**, vei putea adăuga restul echipei.")
+            primul_u = useri_db[0] if useri_db else {"id": 1, "nume": "Avocat Coordonator", "email": "admin@toca-law.ro"}
+            adm_nume = st.text_input("Nume Administrator *", value=primul_u["nume"])
+            adm_email = st.text_input("Email Autentificare *", value=primul_u.get("email") or "admin@toca-law.ro")
+            adm_pass1 = st.text_input("Parolă Nouă *", type="password")
+            adm_pass2 = st.text_input("Confirmă Parola *", type="password")
+            if st.button("✅ Activează Contul de Administrator", type="primary", use_container_width=True):
+                if not adm_email.strip() or not adm_pass1:
+                    st.error("Completează adresa de email și parola.")
+                elif adm_pass1 != adm_pass2:
+                    st.error("Parolele nu coincid.")
+                else:
+                    conn = get_connection()
+                    cur = conn.cursor()
+                    if useri_db:
+                        cur.execute(
+                            "UPDATE utilizatori SET nume = %s, email = %s, parola_hash = %s, rol = 'Administrator', activ = 1 WHERE id = %s",
+                            (adm_nume.strip(), adm_email.strip().lower(), hash_parola(adm_pass1), primul_u["id"])
+                        )
+                    else:
+                        cur.execute(
+                            "INSERT INTO utilizatori (nume, email, parola_hash, rol, activ) VALUES (%s, %s, %s, 'Administrator', 1)",
+                            (adm_nume.strip(), adm_email.strip().lower(), hash_parola(adm_pass1))
+                        )
+                    conn.commit()
+                    conn.close()
+                    get_utilizatori_cached.clear()
+                    st.success("Contul de Administrator a fost activat! Te poți autentifica acum.")
+                    st.rerun()
+    st.stop()
+
+if st.session_state.auth_user is None:
+    col_l1, col_l2, col_l3 = st.columns([1, 1.3, 1])
+    with col_l2:
+        if logo_html:
+            st.markdown(logo_html, unsafe_allow_html=True)
+        with st.container(border=True):
+            st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
+            st.markdown("<h3 style='text-align:center; color:#1E3A8A; margin-bottom:12px;'>🔐 Autentificare CRM Toca Law</h3>", unsafe_allow_html=True)
+            with st.form("form_login_crm"):
+                login_email = st.text_input("Adresă de Email", placeholder="nume@toca-law.ro")
+                login_pass = st.text_input("Parolă", type="password", placeholder="••••••••")
+                submit_login = st.form_submit_button("🔓 Intră în aplicație", type="primary", use_container_width=True)
+
+                if submit_login:
+                    email_cautat = (login_email or "").strip().lower()
+                    user_gasit = None
+                    for u in useri_db:
+                        if (u.get("email") or "").strip().lower() == email_cautat and verifica_parola(login_pass, u.get("parola_hash")):
+                            user_gasit = u
+                            break
+                    if user_gasit:
+                        st.session_state.auth_user = {
+                            "id": user_gasit["id"],
+                            "nume": user_gasit["nume"],
+                            "email": user_gasit["email"],
+                            "rol": user_gasit.get("rol") or "Avocat",
+                        }
+                        st.rerun()
+                    else:
+                        st.error("❌ Adresă de email sau parolă incorectă (sau cont dezactivat).")
+    st.stop()
+
+# --- UTILIZATOR AUTENTIFICAT ---
+auth_u = st.session_state.auth_user
+rol_curent = auth_u.get("rol") or "Avocat colaborator"
+if rol_curent == "Admin":
+    rol_curent = "Administrator"
+elif rol_curent == "Avocat":
+    rol_curent = "Avocat colaborator"
+
+este_admin = (rol_curent == "Administrator")
+are_acces_total = (rol_curent in ("Administrator", "Partener"))
+
 if logo_html:
     st.sidebar.markdown(logo_html, unsafe_allow_html=True)
 
-useri_db = get_utilizatori_cached()
-user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {"Avocat Coordonator": 1}
-utilizator_selectat = st.sidebar.selectbox(
-    "Utilizator",
-    list(user_dict.keys()),
-    key="sel_user_sidebar",
-    label_visibility="collapsed"
+user_dict = {u['nume']: u['id'] for u in useri_db} if useri_db else {auth_u['nume']: auth_u['id']}
+
+if rol_curent == "Administrator":
+    rol_badge = "👑 Administrator"
+elif rol_curent == "Partener":
+    rol_badge = "🏛️ Partener (Acces Total)"
+else:
+    rol_badge = f"⚖️ {rol_curent}"
+st.sidebar.markdown(
+    f"<div style='background:#F8FAFC; border:1px solid #CBD5E1; border-radius:8px; padding:8px 10px; margin-bottom:8px;'>"
+    f"<div style='font-size:13px; font-weight:700; color:#0F172A;'>{auth_u['nume']}</div>"
+    f"<div style='font-size:11px; color:#1E3A8A; font-weight:600;'>{rol_badge}</div>"
+    f"<div style='font-size:10px; color:#64748B;'>{auth_u['email']}</div>"
+    f"</div>",
+    unsafe_allow_html=True
 )
-id_utilizator_curent = user_dict[utilizator_selectat]
+
+utilizator_selectat = auth_u["nume"]
+id_utilizator_curent = auth_u["id"]
 
 if "modul_ales" not in st.session_state:
     st.session_state.modul_ales = "Dosare"
 
 optiuni_meniu = ["Dosare", "Clienți", "Pontaj", "Sarcini", "Căutare"]
+if are_acces_total:
+    optiuni_meniu.append("Utilizatori")
+
 for idx_m, nume_modul in enumerate(optiuni_meniu, start=1):
+    marker_idx = idx_m if idx_m <= 5 else 2
     st.sidebar.markdown(
-        f'<span class="nav-marker-{idx_m}" style="display:none;"></span>',
+        f'<span class="nav-marker-{marker_idx}" style="display:none;"></span>',
         unsafe_allow_html=True
     )
     este_activ = (st.session_state.modul_ales == nume_modul)
@@ -1531,6 +1727,12 @@ for idx_m, nume_modul in enumerate(optiuni_meniu, start=1):
     ):
         st.session_state.modul_ales = nume_modul
         st.rerun()
+
+st.sidebar.markdown("<div style='margin-top:14px;'></div>", unsafe_allow_html=True)
+if st.sidebar.button("🚪 Deconectare", key="btn_logout_sidebar", type="secondary", use_container_width=True):
+    st.session_state.auth_user = None
+    st.session_state.modul_ales = "Dosare"
+    st.rerun()
 
 modul_ales = st.session_state.modul_ales
 
@@ -2608,11 +2810,15 @@ elif modul_ales == "Pontaj":
     toate_pontajele = get_pontaj_detaliat_cached()
 
     col_f1, col_f2 = st.columns([2, 1])
-    filtru_avocat = col_f1.selectbox(
-        "Filtrează activitățile încheiate după avocat:",
-        ["Toată echipa", utilizator_selectat] + [u for u in user_dict.keys() if u != utilizator_selectat],
-        key="filtru_avocat_pontaj"
-    )
+    if are_acces_total:
+        filtru_avocat = col_f1.selectbox(
+            "Filtrează activitățile încheiate după avocat:",
+            ["Toată echipa", utilizator_selectat] + [u for u in user_dict.keys() if u != utilizator_selectat],
+            key="filtru_avocat_pontaj"
+        )
+    else:
+        filtru_avocat = utilizator_selectat
+        col_f1.markdown(f"<div style='padding-top:28px; font-size:13px; color:#475569;'>👤 Afișare activități proprii: <strong>{utilizator_selectat}</strong></div>", unsafe_allow_html=True)
 
     if filtru_avocat != "Toată echipa":
         pontaje_afisate = [p for p in toate_pontajele if p["avocat_nume"] == filtru_avocat]
@@ -2642,9 +2848,10 @@ elif modul_ales == "Pontaj":
             st.warning("Adaugă `python-docx` în fișierul `requirements.txt` de pe GitHub pentru a activa exportul Word.")
         else:
             cr1, cr2, cr3, cr4 = st.columns([1.4, 1.4, 1.0, 1.0])
+            opt_rap_u = ([utilizator_selectat] + [u for u in user_dict.keys() if u != utilizator_selectat] + ["Toată echipa"]) if are_acces_total else [utilizator_selectat]
             avocat_raport = cr1.selectbox(
                 "Utilizator / Avocat",
-                [utilizator_selectat] + [u for u in user_dict.keys() if u != utilizator_selectat] + ["Toată echipa"],
+                opt_rap_u,
                 key="rap_avocat_sel"
             )
             client_raport = cr2.selectbox(
@@ -2962,11 +3169,15 @@ elif modul_ales == "Sarcini":
     toate_sarcinile = get_sarcini_cached()
 
     fc1, fc2, fc3 = st.columns([1.4, 1.4, 1.2])
-    filtru_avocat_t = fc1.selectbox(
-        "Responsabil:",
-        ["Toată echipa", utilizator_selectat] + [u for u in user_dict.keys() if u != utilizator_selectat],
-        key="filtru_avocat_sarcini"
-    )
+    if are_acces_total:
+        filtru_avocat_t = fc1.selectbox(
+            "Responsabil:",
+            ["Toată echipa", utilizator_selectat] + [u for u in user_dict.keys() if u != utilizator_selectat],
+            key="filtru_avocat_sarcini"
+        )
+    else:
+        filtru_avocat_t = utilizator_selectat
+        fc1.markdown(f"<div style='padding-top:28px; font-size:13px; color:#475569;'>👤 Sarcinile mele: <strong>{utilizator_selectat}</strong></div>", unsafe_allow_html=True)
     filtru_stadiu_rap = fc2.selectbox(
         "Stadiu (pentru raport):",
         ["Toate", "În lucru", "Finalizat", "Nou", "Pe rol", "Așteptare", "Renunțări"],
@@ -3044,23 +3255,30 @@ elif modul_ales == "Sarcini":
                         unsafe_allow_html=True
                     )
 
-                    b_c1, b_c2, b_c3 = st.columns([1.4, 0.5, 0.5])
-                    if stadiu_nume != "Finalizat":
-                        if b_c1.button("✅ Finalizat", key=f"fin_card_{item['ID']}", use_container_width=True, help="Marchează sarcina ca finalizată"):
-                            conn = get_connection()
-                            cur = conn.cursor()
-                            cur.execute("UPDATE sarcini SET status = 'Finalizat' WHERE id = %s", (item["ID"],))
-                            conn.commit()
-                            conn.close()
-                            goleste_cache_date()
-                            st.rerun()
-                    else:
-                        b_c1.markdown("<div style='font-size:11px; color:#059669; font-weight:700; padding-top:6px;'>✅ Finalizat</div>", unsafe_allow_html=True)
+                    b_c1, b_c2, b_c3 = st.columns([1.8, 0.55, 0.55], gap="small", vertical_alignment="center")
+                    with b_c1:
+                        st.markdown("<span class='sarcina-actions-marker' style='display:none;'></span>", unsafe_allow_html=True)
+                        if stadiu_nume != "Finalizat":
+                            if st.button("✅ Finalizat", key=f"fin_card_{item['ID']}", use_container_width=True, help="Marchează sarcina ca finalizată"):
+                                conn = get_connection()
+                                cur = conn.cursor()
+                                cur.execute("UPDATE sarcini SET status = 'Finalizat' WHERE id = %s", (item["ID"],))
+                                conn.commit()
+                                conn.close()
+                                goleste_cache_date()
+                                st.rerun()
+                        else:
+                            st.markdown(
+                                "<div style='height:30px; display:flex; align-items:center; justify-content:center; background:#ECFDF5; border:1px solid #A7F3D0; border-radius:6px; font-size:11px; color:#059669; font-weight:700;'>✅ Finalizat</div>",
+                                unsafe_allow_html=True
+                            )
 
-                    if b_c2.button("✏️", key=f"ed_card_{item['ID']}", help="Modifică sarcina"):
-                        dialog_editeaza_sarcina(item)
-                    if b_c3.button("🗑️", key=f"del_card_{item['ID']}", help="Șterge sarcina"):
-                        dialog_sterge_sarcina(item["ID"], item["Titlu Sarcină"])
+                    with b_c2:
+                        if st.button("✏️", key=f"ed_card_{item['ID']}", use_container_width=True, help="Modifică sarcina"):
+                            dialog_editeaza_sarcina(item)
+                    with b_c3:
+                        if st.button("🗑️", key=f"del_card_{item['ID']}", use_container_width=True, help="Șterge sarcina"):
+                            dialog_sterge_sarcina(item["ID"], item["Titlu Sarcină"])
 
 # === 5. CĂUTARE PORTAL & ISTORIC ===
 elif modul_ales == "Căutare":
@@ -3088,3 +3306,117 @@ elif modul_ales == "Căutare":
                 if info.get('sedinte'):
                     st.write("**Istoric Ședințe / Înregistrări:**")
                     st.dataframe(pd.DataFrame(info['sedinte']), use_container_width=True, hide_index=True)
+
+
+# === 6. ADMINISTRARE UTILIZATORI & PERMISIUNI (DOAR ADMIN) ===
+elif modul_ales == "Utilizatori" and are_acces_total:
+    st.markdown("""
+        <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); padding: 18px 22px; border-radius: 10px; border: 1px solid #D4AF37; color: white; margin-bottom: 20px;">
+            <h2 style="margin: 0; font-size: 22px; color: white;">🔐 Administrare Utilizatori & Acces Echipă</h2>
+        </div>
+    """, unsafe_allow_html=True)
+
+    with st.container(border=True):
+        st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
+        with st.expander("➕ Adaugă Utilizator Nou în Echipă", expanded=True):
+            with st.form("form_add_user_admin", clear_on_submit=True):
+                cu1, cu2, cu3, cu4 = st.columns([1.5, 1.6, 1.2, 1.1])
+                u_nume = cu1.text_input("Nume Complet *", placeholder="ex: Av. Maria Popescu")
+                u_email = cu2.text_input("Adresă Email (Login) *", placeholder="maria@toca-law.ro")
+                u_parola = cu3.text_input("Parolă Inițială *", type="password")
+                u_rol = cu4.selectbox("Rol & Permisiuni", ["Avocat colaborator", "Asistent Juridic", "Partener", "Administrator"])
+
+                if st.form_submit_button("💾 Creează Cont Utilizator", type="primary"):
+                    if not u_nume.strip() or not u_email.strip() or not u_parola:
+                        st.error("Completează numele, adresa de email și parola utilizatorului.")
+                    else:
+                        conn = get_connection()
+                        cur = conn.cursor()
+                        cur.execute("SELECT id FROM utilizatori WHERE LOWER(email) = %s", (u_email.strip().lower(),))
+                        if cur.fetchone():
+                            st.error("Există deja un utilizator înregistrat cu această adresă de email.")
+                        else:
+                            cur.execute(
+                                "INSERT INTO utilizatori (nume, email, parola_hash, rol, activ) VALUES (%s, %s, %s, %s, 1)",
+                                (u_nume.strip(), u_email.strip().lower(), hash_parola(u_parola), u_rol)
+                            )
+                            conn.commit()
+                            get_utilizatori_cached.clear()
+                            st.success(f"Utilizatorul **{u_nume.strip()}** ({u_email.strip().lower()}) a fost creat!")
+                            conn.close()
+                            st.rerun()
+                        conn.close()
+
+    @st.dialog("✏️ Modificare Utilizator / Resetare Parolă")
+    def dialog_editeaza_utilizator(u_row):
+        uid_ed = u_row["id"]
+        st.caption(f"Editare cont: **{u_row['nume']}** ({u_row['email']})")
+        nume_nou = st.text_input("Nume Complet *", value=u_row["nume"], key=f"ed_u_nume_{uid_ed}")
+        email_nou = st.text_input("Adresă Email *", value=u_row["email"], key=f"ed_u_email_{uid_ed}")
+
+        rol_opt = ["Administrator", "Partener", "Avocat colaborator", "Asistent Juridic"]
+        idx_r = rol_opt.index(u_row["rol"]) if u_row["rol"] in rol_opt else 1
+        rol_nou = st.selectbox("Rol", rol_opt, index=idx_r, key=f"ed_u_rol_{uid_ed}")
+
+        activ_nou = st.checkbox("Cont Activ (poate accesa CRM-ul)", value=bool(u_row["activ"]), key=f"ed_u_act_{uid_ed}")
+        parola_noua = st.text_input("Parolă Nouă (lasă gol dacă nu dorești schimbarea parolei)", type="password", key=f"ed_u_pass_{uid_ed}")
+
+        cb1, cb2 = st.columns(2)
+        if cb1.button("✅ Salvează Modificările", type="primary", use_container_width=True, key=f"btn_save_u_{uid_ed}"):
+            if not nume_nou.strip() or not email_nou.strip():
+                st.error("Numele și adresa de email sunt obligatorii.")
+            else:
+                conn = get_connection()
+                cur = conn.cursor()
+                if parola_noua:
+                    cur.execute(
+                        "UPDATE utilizatori SET nume = %s, email = %s, rol = %s, activ = %s, parola_hash = %s WHERE id = %s",
+                        (nume_nou.strip(), email_nou.strip().lower(), rol_nou, 1 if activ_nou else 0, hash_parola(parola_noua), uid_ed)
+                    )
+                else:
+                    cur.execute(
+                        "UPDATE utilizatori SET nume = %s, email = %s, rol = %s, activ = %s WHERE id = %s",
+                        (nume_nou.strip(), email_nou.strip().lower(), rol_nou, 1 if activ_nou else 0, uid_ed)
+                    )
+                conn.commit()
+                conn.close()
+                get_utilizatori_cached.clear()
+                st.rerun()
+
+        if cb2.button("❌ Anulează", use_container_width=True, key=f"btn_canc_u_{uid_ed}"):
+            st.rerun()
+
+    toti_userii = get_utilizatori_cached(include_inactivi=True)
+    with st.container(border=True):
+        st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
+        st.markdown("#### 👥 Echipa și Conturile de Acces")
+
+        u_widths = [0.45, 1.8, 2.0, 1.2, 1.0, 0.9, 0.45]
+        u_headers = ["Nr.", "Nume Utilizator", "Email Autentificare", "Rol", "Parolă", "Status", ""]
+        uh_cols = st.columns(u_widths)
+        for col_h, txt_h in zip(uh_cols, u_headers):
+            col_h.markdown(
+                f"<div style='font-size:12px; font-weight:700; color:#475569; padding-bottom:6px; border-bottom:2px solid #E2E8F0;'>{txt_h}</div>" if txt_h else "<div style='height:24px;'></div>",
+                unsafe_allow_html=True
+            )
+
+        for idx_u, u in enumerate(toti_userii, start=1):
+            ur_cols = st.columns(u_widths, vertical_alignment="center")
+            status_txt = "🟢 Activ" if int(u.get("activ") or 0) == 1 else "🔴 Dezactivat"
+            pass_txt = "✅ Setată" if u.get("parola_hash") else "⚠️ Nesetată"
+            rol_u_val = u.get("rol") or "Avocat colaborator"
+            rol_txt = "👑 Administrator (Acces Total)" if rol_u_val == "Administrator" else ("🏛️ Partener (Acces Total)" if rol_u_val == "Partener" else rol_u_val)
+
+            vals_u = [str(idx_u), u["nume"], u["email"] or "-", rol_txt, pass_txt, status_txt]
+            for col_r, val_r in zip(ur_cols[:-1], vals_u):
+                col_r.markdown(
+                    f"<div style='font-size:13px; color:#0F172A; display:flex; align-items:center; min-height:26px; height:26px; line-height:26px;'>{val_r}</div>",
+                    unsafe_allow_html=True
+                )
+
+            with ur_cols[-1]:
+                st.markdown("<span class='row-action-marker' style='display:none;'></span>", unsafe_allow_html=True)
+                if st.button("✏️", key=f"ed_user_btn_{u['id']}", help=f"Modifică contul sau resetează parola pentru {u['nume']}"):
+                    dialog_editeaza_utilizator(u)
+
+            st.markdown("<hr style='margin: 4px 0; border: none; border-top: 1px solid #F1F5F9;'>", unsafe_allow_html=True)
