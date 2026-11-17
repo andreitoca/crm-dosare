@@ -7,6 +7,8 @@ import ssl
 import smtplib
 import base64
 import hashlib
+import secrets
+import time
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import streamlit as st
@@ -405,7 +407,9 @@ def asigura_structura_db_o_data():
             ("email", "VARCHAR(255) DEFAULT ''"),
             ("parola_hash", "VARCHAR(255) DEFAULT ''"),
             ("rol", "VARCHAR(50) DEFAULT 'Avocat'"),
-            ("activ", "TINYINT(1) DEFAULT 1")
+            ("activ", "TINYINT(1) DEFAULT 1"),
+            ("reset_cod", "VARCHAR(20) DEFAULT ''"),
+            ("reset_expira", "BIGINT DEFAULT 0")
         ]:
             try:
                 cur.execute(f"ALTER TABLE utilizatori ADD COLUMN {nume_col} {tip_col}")
@@ -1117,6 +1121,67 @@ def _worker_trimite_email_async(subiect, html_body):
     except Exception:
         pass
 
+
+def trimite_email_resetare_parola(email_destinatar, nume_utilizator, cod_resetare):
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        smtp_server = "toca-law.ro"
+        smtp_port = 465
+        expeditor = ""
+        parola = ""
+        try:
+            cur.execute("SELECT smtp_server, smtp_port, email_expeditor, parola_email FROM setari_email WHERE id = 1")
+            row_mail = cur.fetchone()
+            if row_mail:
+                smtp_server = row_mail.get("smtp_server") or "toca-law.ro"
+                smtp_port = int(row_mail.get("smtp_port") or 465)
+                expeditor = row_mail.get("email_expeditor") or ""
+                parola = row_mail.get("parola_email") or ""
+        except Exception:
+            pass
+        conn.close()
+
+        if not expeditor or not parola:
+            return False, "Serverul de email SMTP nu este configurat în baza de date (tabela setari_email). Contactează Administratorul pentru resetarea parolei."
+
+        subiect = "🔐 Cod resetare parolă • CRM Toca Law"
+        html_body = f"""<!DOCTYPE html>
+        <html><head><meta http-equiv="Content-Type" content="text/html; charset=utf-8"></head>
+        <body style="font-family: Arial, sans-serif; color: #1E293B; padding: 16px;">
+            <div style="background: linear-gradient(135deg, #1E3A8A 0%, #4169E1 100%); color: white; padding: 14px 20px; border-radius: 8px; border: 1px solid #D4AF37;">
+                <h3 style="margin: 0; color: white;">🔐 Resetare Parolă • CRM Toca Law</h3>
+            </div>
+            <div style="padding: 18px; border: 1px solid #E2E8F0; border-radius: 8px; margin-top: 10px; background-color: #F8FAFC;">
+                <p>Bună ziua, <strong>{nume_utilizator}</strong>,</p>
+                <p>Am primit o solicitare de resetare a parolei pentru contul dumneavoastră asociat adresei <strong>{email_destinatar}</strong>.</p>
+                <p style="margin: 16px 0;">Codul dumneavoastră de verificare (valabil <strong>15 minute</strong>) este:</p>
+                <div style="background: #FFFDF5; border: 2px solid #D4AF37; border-radius: 8px; padding: 12px 20px; text-align: center; font-size: 26px; font-weight: 800; letter-spacing: 6px; color: #1E3A8A;">
+                    {cod_resetare}
+                </div>
+                <p style="font-size: 12px; color: #64748B; margin-top: 16px;">Dacă nu ați solicitat resetarea parolei, puteți ignora acest mesaj în siguranță.</p>
+            </div>
+        </body></html>"""
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subiect
+        msg["From"] = f"CRM Toca Law <{expeditor}>"
+        msg["To"] = email_destinatar
+        msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+        if smtp_port == 465:
+            ctx = ssl.create_default_context()
+            server = smtplib.SMTP_SSL(smtp_server, smtp_port, context=ctx, timeout=10)
+        else:
+            server = smtplib.SMTP(smtp_server, smtp_port, timeout=10)
+            server.starttls()
+        server.login(expeditor, parola)
+        server.sendmail(expeditor, [email_destinatar], msg.as_string())
+        server.quit()
+        return True, f"Un cod de verificare din 6 cifre a fost trimis pe adresa **{email_destinatar}**."
+    except Exception as e:
+        return False, f"Nu s-a putut trimite emailul de resetare: {e}"
+
 def trimite_email_echipa(subiect, html_body):
     t = threading.Thread(target=_worker_trimite_email_async, args=(subiect, html_body), daemon=True)
     t.start()
@@ -1639,6 +1704,11 @@ if not exista_parole_setate:
                     st.rerun()
     st.stop()
 
+if "mod_resetare_parola" not in st.session_state:
+    st.session_state.mod_resetare_parola = False
+if "reset_email_activ" not in st.session_state:
+    st.session_state.reset_email_activ = ""
+
 if st.session_state.auth_user is None:
     col_l1, col_l2, col_l3 = st.columns([1, 1.3, 1])
     with col_l2:
@@ -1646,29 +1716,122 @@ if st.session_state.auth_user is None:
             st.markdown(logo_html, unsafe_allow_html=True)
         with st.container(border=True):
             st.markdown("<span class='gold-box-marker' style='display:none;'></span>", unsafe_allow_html=True)
-            st.markdown("<h3 style='text-align:center; color:#1E3A8A; margin-bottom:12px;'>🔐 Autentificare CRM Toca Law</h3>", unsafe_allow_html=True)
-            with st.form("form_login_crm"):
-                login_email = st.text_input("Adresă de Email", placeholder="nume@toca-law.ro")
-                login_pass = st.text_input("Parolă", type="password", placeholder="••••••••")
-                submit_login = st.form_submit_button("🔓 Intră în aplicație", type="primary", use_container_width=True)
 
-                if submit_login:
-                    email_cautat = (login_email or "").strip().lower()
-                    user_gasit = None
-                    for u in useri_db:
-                        if (u.get("email") or "").strip().lower() == email_cautat and verifica_parola(login_pass, u.get("parola_hash")):
-                            user_gasit = u
-                            break
-                    if user_gasit:
-                        st.session_state.auth_user = {
-                            "id": user_gasit["id"],
-                            "nume": user_gasit["nume"],
-                            "email": user_gasit["email"],
-                            "rol": user_gasit.get("rol") or "Avocat",
-                        }
-                        st.rerun()
-                    else:
-                        st.error("❌ Adresă de email sau parolă incorectă (sau cont dezactivat).")
+            if not st.session_state.mod_resetare_parola:
+                st.markdown("<h3 style='text-align:center; color:#1E3A8A; margin-bottom:12px;'>🔐 Autentificare CRM Toca Law</h3>", unsafe_allow_html=True)
+                with st.form("form_login_crm"):
+                    login_email = st.text_input("Adresă de Email", placeholder="nume@toca-law.ro")
+                    login_pass = st.text_input("Parolă", type="password", placeholder="••••••••")
+                    submit_login = st.form_submit_button("🔓 Intră în aplicație", type="primary", use_container_width=True)
+
+                    if submit_login:
+                        email_cautat = (login_email or "").strip().lower()
+                        user_gasit = None
+                        for u in useri_db:
+                            if (u.get("email") or "").strip().lower() == email_cautat and verifica_parola(login_pass, u.get("parola_hash")):
+                                user_gasit = u
+                                break
+                        if user_gasit:
+                            st.session_state.auth_user = {
+                                "id": user_gasit["id"],
+                                "nume": user_gasit["nume"],
+                                "email": user_gasit["email"],
+                                "rol": user_gasit.get("rol") or "Avocat colaborator",
+                            }
+                            st.rerun()
+                        else:
+                            st.error("❌ Adresă de email sau parolă incorectă (sau cont dezactivat).")
+
+                if st.button("🔑 Am uitat parola", key="btn_forgot_pass", use_container_width=True):
+                    st.session_state.mod_resetare_parola = True
+                    st.session_state.reset_email_activ = ""
+                    st.rerun()
+
+            else:
+                st.markdown("<h3 style='text-align:center; color:#1E3A8A; margin-bottom:8px;'>🔑 Resetare Parolă prin Email</h3>", unsafe_allow_html=True)
+                st.caption("Introdu adresa de email asociată contului tău pentru a primi un cod de resetare.")
+
+                with st.form("form_send_reset_code"):
+                    email_rec = st.text_input(
+                        "Adresă de Email *",
+                        value=st.session_state.reset_email_activ,
+                        placeholder="nume@toca-law.ro"
+                    )
+                    trimite_cod_btn = st.form_submit_button("📧 Trimite codul pe email", type="primary", use_container_width=True)
+
+                    if trimite_cod_btn:
+                        em_clean = (email_rec or "").strip().lower()
+                        if not em_clean:
+                            st.error("Introdu adresa de email.")
+                        else:
+                            conn = get_connection()
+                            cur = conn.cursor()
+                            cur.execute("SELECT id, nume, email, activ FROM utilizatori WHERE LOWER(email) = %s", (em_clean,))
+                            u_rec = cur.fetchone()
+                            if not u_rec or int(u_rec.get("activ") or 0) != 1:
+                                conn.close()
+                                st.error("❌ Nu există niciun cont activ asociat acestei adrese de email.")
+                            else:
+                                cod_6 = f"{secrets.randbelow(900000) + 100000}"
+                                expira_ts = int(time.time()) + 900  # 15 minute
+                                cur.execute(
+                                    "UPDATE utilizatori SET reset_cod = %s, reset_expira = %s WHERE id = %s",
+                                    (cod_6, expira_ts, u_rec["id"])
+                                )
+                                conn.commit()
+                                conn.close()
+                                ok_mail, msg_mail = trimite_email_resetare_parola(u_rec["email"], u_rec["nume"], cod_6)
+                                if ok_mail:
+                                    st.session_state.reset_email_activ = em_clean
+                                    st.success(msg_mail)
+                                else:
+                                    st.error(msg_mail)
+
+                if st.session_state.reset_email_activ:
+                    st.markdown("---")
+                    with st.form("form_confirm_reset_pass"):
+                        cod_introdus = st.text_input("Cod de verificare (6 cifre primit pe email) *", max_chars=6, placeholder="123456")
+                        pass_noua_1 = st.text_input("Parolă Nouă *", type="password")
+                        pass_noua_2 = st.text_input("Confirmă Parola Nouă *", type="password")
+                        confirma_reset_btn = st.form_submit_button("✅ Salvează Noua Parolă", type="primary", use_container_width=True)
+
+                        if confirma_reset_btn:
+                            if not cod_introdus.strip() or not pass_noua_1:
+                                st.error("Completează codul de verificare și parola nouă.")
+                            elif pass_noua_1 != pass_noua_2:
+                                st.error("Parolele introduse nu coincid.")
+                            else:
+                                conn = get_connection()
+                                cur = conn.cursor()
+                                cur.execute(
+                                    "SELECT id, reset_cod, reset_expira FROM utilizatori WHERE LOWER(email) = %s AND activ = 1",
+                                    (st.session_state.reset_email_activ,)
+                                )
+                                u_ver = cur.fetchone()
+                                acum_sec = int(time.time())
+                                if not u_ver or not u_ver.get("reset_cod") or u_ver["reset_cod"] != cod_introdus.strip():
+                                    conn.close()
+                                    st.error("❌ Codul de verificare este incorect.")
+                                elif int(u_ver.get("reset_expira") or 0) < acum_sec:
+                                    conn.close()
+                                    st.error("⏰ Codul de verificare a expirat. Solicită un cod nou.")
+                                else:
+                                    cur.execute(
+                                        "UPDATE utilizatori SET parola_hash = %s, reset_cod = '', reset_expira = 0 WHERE id = %s",
+                                        (hash_parola(pass_noua_1), u_ver["id"])
+                                    )
+                                    conn.commit()
+                                    conn.close()
+                                    get_utilizatori_cached.clear()
+                                    st.session_state.mod_resetare_parola = False
+                                    st.session_state.reset_email_activ = ""
+                                    st.success("✅ Parola a fost resetată cu succes! Te poți autentifica acum.")
+                                    st.rerun()
+
+                if st.button("⬅️ Înapoi la autentificare", key="btn_back_to_login", use_container_width=True):
+                    st.session_state.mod_resetare_parola = False
+                    st.session_state.reset_email_activ = ""
+                    st.rerun()
     st.stop()
 
 # --- UTILIZATOR AUTENTIFICAT ---
